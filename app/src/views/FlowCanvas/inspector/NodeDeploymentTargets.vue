@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth'
 import { prepareDeploymentProcesses } from '@/utils/deploymentProcesses'
 import { formatRunnerDateTime } from '@/utils/format/runnerHeartbeat'
 import { runnerManagementApi, type CodeRepository, type DeploymentEnvironment, type DeploymentResourceRule, type TaskArtifact, type NodeDeploymentResource, type NodeDeploymentSettings, type RunnerInstance } from '@/api/runnerManagement'
+import RunnerFilesDrawer from '@/views/Settings/RunnerFilesDrawer.vue'
 
 const props = defineProps<{
   sourceId: string
@@ -29,6 +30,7 @@ type DeployedNodeOutput = Pick<TaskArtifact, 'artifactId' | 'taskId' | 'gitCommi
 const deployedJobs = ref<DeployedNodeOutput[]>([]), deployedLoading = ref(false), deployedError = ref('')
 const advancedOpen = ref(false)
 const deployedExpanded = ref(true)
+const browsing = ref<{ runner: RunnerInstance; directory: string } | null>(null)
 
 const deployedResources = computed(() => {
   const byRunner = new Map<string, DeployedNodeOutput>()
@@ -106,6 +108,12 @@ const machine = (rule: DeploymentResourceRule) => runners.value.find(item => ite
 const machineById = (runnerId?: string) => runners.value.find(item => item.runnerId === runnerId)
 const ruleByResourceId = (resourceId?: string) => choices.value.find(item => item.resourceId === resourceId)
 const runnerDirectory = (rule: DeploymentResourceRule) => machine(rule)?.installDirectory || 'Runner 目录未上报'
+const isDeployed = (runnerId: string) => deployedResources.value.some(job => job.runnerId === runnerId)
+const resourceLabel = (rule: DeploymentResourceRule) => `${machine(rule)?.ipAddress || '机器未上报 IP'} · ${runnerDirectory(rule)}${isDeployed(rule.runnerId) ? ' · 已部署' : ''}`
+function browseDirectory(runnerId: string, directory?: string) {
+  const runner = machineById(runnerId)
+  if (runner && directory) browsing.value = { runner, directory }
+}
 
 type TargetDeployState = 'fresh' | 'update' | 'directory' | 'latest'
 interface TargetDeployMeta {
@@ -258,7 +266,7 @@ function flushSettings() {
     } finally { if (current()) saving.value = false }
   })
 }
-function suspend() { flushSettings(); stopped = true; sequence++; operation++; previewSequence++; clearTimeout(timer); clearTimeout(previewTimer) }
+function suspend() { browsing.value = null; flushSettings(); stopped = true; sequence++; operation++; previewSequence++; clearTimeout(timer); clearTimeout(previewTimer) }
 onBeforeUnmount(suspend)
 onDeactivated(suspend)
 onActivated(() => { if (stopped) { stopped = false; saving.value = false; busy.value = false; void load(); poll() } })
@@ -310,6 +318,7 @@ watch(() => [props.sourceId, props.flowId, props.stepId, props.configId, props.c
   flushSettings(); revisionState = { revision: '' }; settingsStatus.value = '修改后自动保存'
   sequence++; operation++; selection.value = null; error.value = ''; saving.value = false; busy.value = false
   deployedJobs.value = []; deployedError.value = ''; deployedLoading.value = false
+  browsing.value = null
   advancedOpen.value = false
   resetSettings()
   void load(); poll()
@@ -431,7 +440,8 @@ async function deploy() {
               <span class="dt-commit-tag" :title="job.gitCommit">{{ job.gitCommit.slice(0, 8) }}</span>
               <time class="dt-time">{{ formatRunnerDateTime(job.updatedAt) }}</time>
             </div>
-            <code class="dt-path-code" :title="job.installedPath || job.targetPath">{{ job.installedPath || job.targetPath || '部署目录未记录' }}</code>
+            <button v-if="machineById(job.runnerId) && (job.installedPath || job.targetPath)" type="button" class="dt-path-code dt-directory-link" :title="job.installedPath || job.targetPath" data-testid="deployed-directory-link" @click="browseDirectory(job.runnerId, job.installedPath || job.targetPath)">{{ job.installedPath || job.targetPath }}</button>
+            <code v-else class="dt-path-code" :title="job.installedPath || job.targetPath">{{ job.installedPath || job.targetPath || '部署目录未记录' }}</code>
             <details v-if="job.outputFiles.length" class="dt-deployed-files">
               <summary>已部署文件（{{ job.outputFiles.length }}）</summary>
               <code v-for="file in job.outputFiles" :key="file.path" class="dt-path-code" :title="file.sha256">{{ file.path }}</code>
@@ -485,13 +495,14 @@ async function deploy() {
           v-for="rule in choices"
           :key="rule.resourceId"
           :value="rule.resourceId"
-          :label="`${machine(rule)?.ipAddress || '机器未上报 IP'} · ${runnerDirectory(rule)}`"
+          :label="resourceLabel(rule)"
           :title="`${machine(rule)?.status === 'online' ? '在线' : '离线，提交后等待上线'} · ${rule.runnerId}\n${runnerDirectory(rule)}`"
         >
           <span class="dt-option-main">
             <i class="dt-dot" :class="machine(rule)?.status === 'online' ? 'is-online' : 'is-offline'" />
-            <span>{{ machine(rule)?.ipAddress || '机器未上报 IP' }} · {{ runnerDirectory(rule) }}</span>
+            <span>{{ machine(rule)?.ipAddress || '机器未上报 IP' }} · </span><button v-if="machine(rule)?.installDirectory" type="button" class="dt-directory-link dt-option-directory" :title="machine(rule)?.installDirectory" data-testid="deployment-option-directory" @click.stop="browseDirectory(rule.runnerId, machine(rule)?.installDirectory)">{{ runnerDirectory(rule) }}</button><span v-else>{{ runnerDirectory(rule) }}</span>
           </span>
+          <span v-if="isDeployed(rule.runnerId)" class="dt-deployed-tag" data-testid="deployment-option-deployed">已部署</span>
           <small class="dt-resource-status">{{ machine(rule)?.status === 'online' ? '在线' : '离线' }}</small>
         </el-option>
       </el-select>
@@ -519,7 +530,15 @@ async function deploy() {
               >{{ targetBadgeText[targetDeployMeta(target.resourceId, target.runnerId, target.deploymentDirectory).state] }}</span>
               <span class="dt-target-state">{{ machineById(target.runnerId)?.status === 'online' ? '在线' : '离线' }}</span>
             </div>
-            <code
+            <button
+              v-if="machineById(target.runnerId) && !target.pathError && (target.deploymentDirectory || target.targetPath)"
+              type="button"
+              class="dt-path-code dt-directory-link"
+              :title="target.deploymentDirectory || target.targetPath"
+              data-testid="deployment-target-directory"
+              @click="browseDirectory(target.runnerId, target.deploymentDirectory || target.targetPath)"
+            >{{ target.deploymentDirectory || target.targetPath }}</button>
+            <code v-else
               class="dt-path-code"
               :class="{ 'dt-error': target.pathError }"
               :title="target.deploymentDirectory || target.pathError || '目录未上报'"
@@ -644,6 +663,7 @@ async function deploy() {
         @click="deploy"
       >创建部署任务（{{ selectedIds.length }} 台）</el-button>
     </div>
+    <RunnerFilesDrawer v-if="browsing" :key="browsing.runner.runnerId + ':' + browsing.directory" :runner="browsing.runner" :directory="browsing.directory" @close="browsing = null" />
   </div>
 </template>
 
@@ -693,10 +713,16 @@ async function deploy() {
 .dt-commit-tag { padding: 0 5px; border-radius: 4px; background: #fff; border: 1px solid var(--el-border-color-lighter); color: var(--el-text-color-regular); font-family: monospace; font-size: 10px; }
 .dt-time { margin-left: auto; color: var(--el-text-color-placeholder); font-size: 10px; white-space: nowrap; }
 .dt-path-code { display: block; font-size: 11px; color: var(--el-text-color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dt-directory-link { padding: 0; border: 0; background: transparent; color: var(--el-color-primary); cursor: pointer; font-family: Consolas, monospace; text-align: left; max-width: 100%; }
+.dt-directory-link:hover { text-decoration: underline; }
+.dt-directory-link:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; border-radius: 2px; }
+.dt-option-directory { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; }
+.dt-deployed-tag { margin-left: 8px; font-size: 11px; color: var(--el-color-success); }
 
 /* 目标选择与落地目录预览 */
 .dt-resource-select { width: 100%; min-width: 0; }
-.dt-option-main { display: inline-flex; align-items: center; gap: 6px; }
+.dt-option-main { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: calc(100% - 90px); vertical-align: middle; }
+.dt-option-main > span { flex-shrink: 0; }
 .dt-resource-status { margin-left: 10px; color: var(--el-text-color-secondary); }
 .dt-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
 .dt-dot.is-online { background: var(--el-color-success); }

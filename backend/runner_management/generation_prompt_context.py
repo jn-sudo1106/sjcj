@@ -79,6 +79,7 @@ def fill(text, values):
 def compose(system, user, values, continuation=''):
     context = (f'【本次代码生成配置】\n目标列表 URL：{values["url"]}\n生成文件名：{values["file_name"]}\n'
                + (f'代码保存目录：{values["code_dir"]}\n' if values['code_dir'] else '')
+               + (f'输入目录：{values["input_file_dir"]}\n输入文件从此目录读取，不要根据项目目录另行拼接 input。\n' if values['input_file_dir'] else '')
                + (f'输入参考文件：\n{values["reference_files"]}\n' if values.get('reference_files') else '')
                + f'代码保存要求：{values["code_save_requirement"]}\n【代码生成配置结束】')
     previous = '\n\n' + continuation if continuation else ''

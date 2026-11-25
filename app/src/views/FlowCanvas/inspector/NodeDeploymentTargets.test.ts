@@ -41,10 +41,64 @@ async function setup() {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }, { path: '/settings', component: { template: '<div />' } }] })
   await router.push('/')
   wrapper = mount(NodeDeploymentTargets, { props: { ...context, archiveId: 'archive1' }, global: {
-    plugins: [router, ElementPlus], stubs: { DeploymentRuntimeActions: true },
+    plugins: [router, ElementPlus], stubs: { DeploymentRuntimeActions: true, RunnerFilesDrawer: { name: 'RunnerFilesDrawer', props: ['runner', 'directory'], emits: ['close'], template: '<div data-testid="remote-directory-browser" />' } },
   } })
   await flushPromises(); return wrapper
 }
+it('部署目标目录和已部署目录打开各自机器的远程文件夹，浏览不修改目标选择', async () => {
+  vi.mocked(runnerManagementApi.nodeDeploymentResource).mockResolvedValue({ ...choice(['r1', 'r2']), targets: [
+    { resourceId: 'r1', runnerId: 'runner1', deploymentDirectory: 'D:/Runner2/instance/links/1401218/sites' },
+    { resourceId: 'r2', runnerId: 'runner2', deploymentDirectory: 'D:/Runner/instance/custom/news' },
+  ] })
+  vi.mocked(runnerManagementApi.artifacts).mockResolvedValue({ total: 1, items: [
+    { artifactId: 'existing', serverId: 'runner1', resourceId: 'r1', machinePath: 'D:/Runner2/instance/old/news', gitCommit: 'a'.repeat(40), updatedAt: '2026-11-22T10:00:00Z' },
+  ] as never })
+  const w = await setup()
+  await w.findAll('[data-testid="deployment-target-directory"]')[1]!.trigger('click')
+  let browser = w.getComponent({ name: 'RunnerFilesDrawer' })
+  expect(browser.props('runner').runnerId).toBe('runner2')
+  expect(browser.props('directory')).toBe('D:/Runner/instance/custom/news')
+  browser.vm.$emit('close'); await flushPromises()
+  expect(w.find('[data-testid="remote-directory-browser"]').exists()).toBe(false)
+  await w.get('[data-testid="deployed-directory-link"]').trigger('click')
+  browser = w.getComponent({ name: 'RunnerFilesDrawer' })
+  expect(browser.props('runner').runnerId).toBe('runner1')
+  expect(browser.props('directory')).toBe('D:/Runner2/instance/old/news')
+  expect(runnerManagementApi.saveNodeDeploymentResource).not.toHaveBeenCalled()
+  await w.setProps({ sourceId: '430024902' }); await flushPromises()
+  expect(w.find('[data-testid="remote-directory-browser"]').exists()).toBe(false)
+})
+it('下拉列表展示已部署标记，版本变化仍标注已部署，切换环境重新判断', async () => {
+  vi.mocked(runnerManagementApi.artifacts).mockResolvedValue({ total: 1, items: [
+    { artifactId: 'existing', serverId: 'runner2', resourceId: 'old-resource-id', gitCommit: 'a'.repeat(40), updatedAt: '2026-11-22T10:00:00Z' },
+  ] as never })
+  const w = await setup()
+  const options = () => w.findAllComponents({ name: 'ElOption' }).filter(option => ['r1', 'r2'].includes(option.props('value')))
+  expect(options().find(option => option.props('value') === 'r1')!.props('label')).not.toContain('已部署')
+  expect(options().find(option => option.props('value') === 'r2')!.props('label')).toContain('已部署')
+  await w.setProps({ archiveCommit: 'b'.repeat(40) }); await flushPromises()
+  expect(options().find(option => option.props('value') === 'r2')!.text()).toContain('已部署')
+  await options()[0]!.get('[data-testid="deployment-option-directory"]').trigger('click')
+  expect(w.getComponent({ name: 'RunnerFilesDrawer' }).props('directory')).toBe('D:/Runner2/instance')
+  expect(runnerManagementApi.saveNodeDeploymentResource).not.toHaveBeenCalled()
+  vi.mocked(runnerManagementApi.artifacts).mockResolvedValue({ total: 0, items: [] })
+  await w.findAll('input[type="radio"]')[1]!.setValue(true); await flushPromises()
+  expect(options().every(option => !option.props('label').includes('已部署'))).toBe(true)
+  expect(w.find('[data-testid="remote-directory-browser"]').exists()).toBe(false)
+})
+it('目录浏览允许只读账号，路径无效或机器缺失时不提供错误的链接', async () => {
+  useAuthStore().roles = ['reader']
+  vi.mocked(runnerManagementApi.nodeDeploymentResource).mockResolvedValue({ ...choice(['r1']), targets: [
+    { resourceId: 'r1', runnerId: 'runner1', deploymentDirectory: 'D:/Runner2/instance/links/1401218' },
+    { resourceId: 'r2', runnerId: 'runner2', pathError: '路径无效' },
+    { resourceId: 'missing', runnerId: 'deleted-runner', deploymentDirectory: 'unknown/path' },
+  ] } as never)
+  const w = await setup()
+  expect(w.findAll('[data-testid="deployment-target-directory"]')).toHaveLength(1)
+  await w.get('[data-testid="deployment-target-directory"]').trigger('click')
+  expect(w.getComponent({ name: 'RunnerFilesDrawer' }).props('runner').runnerId).toBe('runner1')
+  expect(runnerManagementApi.saveNodeDeploymentResource).not.toHaveBeenCalled()
+})
 it('下拉多选两台机器保存完整目标列表，并提交当前归档的独立部署任务', async () => {
   vi.mocked(runnerManagementApi.deployGeneratedArchive).mockResolvedValue({ items: [{ jobId: 'job1' }, { jobId: 'job2' }] } as never)
   const w = await setup()

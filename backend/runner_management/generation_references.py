@@ -64,8 +64,10 @@ def sync(app, server_id, workspace, files, emit=None):
     with app.store.connect() as db:
         previous = db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (key,)).fetchone()
     old = json.loads(previous['setting_value']) if previous else []
-    if not files and not old: return
-    if emit: emit('progress', message=f'正在同步 {len(files)} 个 Git 参考文件到输入目录…')
+    if not files and not old:
+        if emit: emit('progress', message='未配置 Git 参考文件，跳过输入目录同步')
+        return
+    if emit: emit('progress', message=f'正在同步 {len(files)} 个 Git 参考文件到输入目录…' if files else '正在清理已取消的 Git 参考文件…')
     payload, receipt = [], []
     # Resolve every input before touching the remote machine.
     for item in files:
@@ -87,5 +89,8 @@ def sync(app, server_id, workspace, files, emit=None):
         operation(app, server_id, {'action': 'upload', 'overwrite': True, 'files': payload})
         actual = {item['path']: item['sha256'] for item in operation(app, server_id, {'action': 'export', 'paths': [item['path'] for item in receipt]})['files']}
         if any(actual.get(item['path']) != item['sha256'] for item in receipt): raise ApiError('参考文件下载校验失败，已停止生成', 409)
+        if emit:
+            for item in receipt:
+                emit('progress', message=f"已同步参考文件 {PurePosixPath(item['path']).name} → {workspace['inputFileDir']}（SHA-256 校验通过）")
     with app.store.connect() as db: store_layout(db, key, receipt)
-    if emit: emit('progress', message='Git 参考文件同步并校验完成')
+    if emit: emit('progress', message='Git 参考文件同步并校验完成' if files else '已清理取消的 Git 参考文件，当前未配置输入参考文件')

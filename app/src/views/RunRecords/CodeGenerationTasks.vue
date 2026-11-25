@@ -42,6 +42,24 @@ const referenceModel = ref<GenerationModelCall | null>(null), referenceError = r
 const detailTab = ref('request')
 const revising = ref(false)
 const regenerationJob = ref<MqCodeJob | null>(null), openingRegeneration = ref('')
+const submittingCode = ref(''), submissionError = ref('')
+async function submitTaskCode(task: TaskInst) {
+  if (!canDelete.value || submittingCode.value) return
+  submittingCode.value = task.taskId; submissionError.value = ''
+  if (selected.value?.taskId === task.taskId) stopPolling()
+  try {
+    const { job: updated } = await runnerManagementApi.submitGeneratedTaskCode(task.taskId)
+    if (!active) return
+    execution.value[task.taskId] = updated.status
+    if (updated.result?.archive) rowArchives.value[task.taskId] = updated.result.archive
+    const refreshed: TaskInst = { ...task, state: updated.status === 'succeeded' ? 'C' : 'E', taskResult: updated.message }
+    rows.value = rows.value.map(row => row.taskId === task.taskId ? refreshed : row)
+    if (selected.value?.taskId === task.taskId) { selected.value = refreshed; job.value = updated; detailTab.value = 'result'; detailError.value = '' }
+    if (updated.status === 'succeeded') ElMessage.success(updated.message || '生成代码已提交')
+    else submissionError.value = updated.message || '生成代码提交失败'
+  } catch (e) { if (active) submissionError.value = e instanceof Error ? e.message : String(e) }
+  finally { submittingCode.value = '' }
+}
 let regenerationSequence = 0
 async function openRegeneration(task: TaskInst) {
   if (!canDelete.value || openingRegeneration.value) return
@@ -340,6 +358,7 @@ onBeforeUnmount(() => { active = false; ++listSequence; ++regenerationSequence; 
     <el-alert v-if="executionError" :title="`执行状态查询失败：${executionError}`" type="warning" :closable="false" />
     <el-alert v-if="metadataError" :title="metadataError" type="warning" :closable="false" />
     <el-alert v-if="actionError" :title="`删除任务失败：${actionError}`" type="error" :closable="false" />
+    <el-alert v-if="submissionError" :title="`提交生成代码失败：${submissionError}`" type="error" :closable="false" data-testid="generation-submission-error" />
     <div class="task-layout" data-testid="code-task-split-layout">
     <section class="task-list-panel" aria-label="智能体任务列表">
     <div v-if="canDelete" class="task-actions"><el-button type="danger" plain size="small" :disabled="!checkedTasks.length || !!deleting || loading" :loading="deleting === 'batch'" data-testid="delete-selected-code-tasks" @click="removeSelected">删除所选{{ checkedTasks.length ? `（${checkedTasks.length}）` : '' }}</el-button><span>待处理任务可删除，运行中任务不可删除</span></div>
@@ -348,7 +367,7 @@ onBeforeUnmount(() => { active = false; ++listSequence; ++regenerationSequence; 
       <el-table-column label="任务信息 / 状态 / 结果" min-width="145"><template #default="{ row }"><el-button link type="primary" @click.stop="openDetail(row)">{{ row.taskId }}</el-button><div class="cell-ellipsis" :title="row.taskName">{{ row.taskName || '智能体任务' }}</div><span class="task-status" :class="`is-${execution[row.taskId] || 'unknown'}`" :data-testid="`code-task-status-${row.taskId}`">{{ execution[row.taskId] === 'succeeded' ? '已完成' : executionLabel(row) }}</span><small v-if="rowFinishedAt[row.taskId]" :title="`完成时间：${formatRunnerDateTime(rowFinishedAt[row.taskId])}`">完成 {{ formatRunnerDateTime(rowFinishedAt[row.taskId]) }}</small><small v-else>{{ formatRunnerDateTime(row.createdAt, '—') }}</small><template v-if="repositoryResult(row)"><RouterLink :to="repositoryResult(row)!.target" class="cell-source" :data-testid="`code-task-repository-${row.taskId}`" :title="repositoryResult(row)!.count === 1 ? '查看仓库代码文件' : '查看该配置生成的仓库文件'" @click.stop>{{ repositoryResult(row)!.label }}</RouterLink><small v-if="repositoryResult(row)!.count > 1">{{ repositoryResult(row)!.count }} 个文件</small></template></template></el-table-column>
       <el-table-column label="所属源 / 流程节点" min-width="165"><template #default="{ row }"><RouterLink v-if="taskInfo(row).sourceId" :to="sourceLink(row)" class="cell-source" :title="taskInfo(row).sourceId" @click.stop>{{ taskInfo(row).sourceName }}</RouterLink><span v-else>未记录源</span><small>源 {{ taskInfo(row).sourceId || '—' }}</small><div class="cell-ellipsis" :title="`${taskInfo(row).flowName} / ${taskInfo(row).nodeName}`">{{ taskInfo(row).flowName }} / {{ taskInfo(row).nodeName }}</div><small :title="taskInfo(row).configId">配置 {{ taskInfo(row).configId || '—' }}</small></template></el-table-column>
       <el-table-column label="模型 / 调用地址" min-width="155"><template #default="{ row }"><div class="cell-ellipsis" :title="taskModel(row)?.name">{{ taskModel(row)?.name || '未记录模型' }}</div><small>{{ taskModel(row)?.model || '接口默认模型' }}</small><div class="cell-ellipsis model-endpoint" :title="taskModel(row)?.endpoint">{{ taskModel(row)?.endpoint || '—' }}</div><div class="cell-ellipsis" :title="generationServerLabel(taskModel(row), ['waiting', 'queued'].includes(execution[row.taskId] || ''))" data-testid="task-generation-server">{{ generationServerLabel(taskModel(row), ['waiting', 'queued'].includes(execution[row.taskId] || '')) }}</div></template></el-table-column>
-      <el-table-column label="操作" width="145" fixed="right"><template #default="{ row }"><div class="code-task-row-actions"><el-button link type="primary" @click.stop="openDetail(row)">查看详情</el-button><el-button v-if="canDelete && ['succeeded', 'failed'].includes(execution[row.taskId])" link type="primary" :loading="openingRegeneration === row.taskId" :disabled="!!openingRegeneration || !!deleting" data-testid="open-regeneration" @click.stop="openRegeneration(row)">修改后重新生成</el-button><el-button v-if="canDelete" link type="danger" :loading="deleting === row.taskId" :disabled="!!deleting || execution[row.taskId] === 'running'" :title="execution[row.taskId] === 'running' ? '执行结束后可删除' : '删除此智能体任务'" data-testid="delete-code-task" @click.stop="removeTask(row)">删除</el-button></div></template></el-table-column>
+      <el-table-column label="操作" width="145" fixed="right"><template #default="{ row }"><div class="code-task-row-actions"><el-button link type="primary" @click.stop="openDetail(row)">查看详情</el-button><el-button v-if="canDelete && ['succeeded', 'failed'].includes(execution[row.taskId])" link type="primary" :loading="submittingCode === row.taskId" :disabled="!!submittingCode || !!deleting || !!openingRegeneration" data-testid="submit-generated-task-code" @click.stop="submitTaskCode(row)">提交生成代码</el-button><el-button v-if="canDelete && ['succeeded', 'failed'].includes(execution[row.taskId])" link type="primary" :loading="openingRegeneration === row.taskId" :disabled="!!openingRegeneration || !!deleting || !!submittingCode" data-testid="open-regeneration" @click.stop="openRegeneration(row)">修改后重新生成</el-button><el-button v-if="canDelete" link type="danger" :loading="deleting === row.taskId" :disabled="!!deleting || !!submittingCode || execution[row.taskId] === 'running'" :title="execution[row.taskId] === 'running' ? '执行结束后可删除' : '删除此智能体任务'" data-testid="delete-code-task" @click.stop="removeTask(row)">删除</el-button></div></template></el-table-column>
     </el-table>
     <el-pagination v-model:current-page="page" v-model:page-size="size" :total="total" :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next" @current-change="load" @size-change="search" />
     </section>
@@ -396,7 +415,7 @@ onBeforeUnmount(() => { active = false; ++listSequence; ++regenerationSequence; 
               <pre v-else>尚未构造模型请求，当前展示的是任务调用配置，不代表已经发起调用。</pre>
             </section>
           </el-tab-pane>
-          <el-tab-pane label="生成结果" name="result"><section v-if="job?.result" class="generation-result" data-testid="generation-result">
+          <el-tab-pane label="生成结果" name="result"><el-button v-if="canDelete && job && ['succeeded', 'failed'].includes(job.status)" type="primary" size="small" :loading="submittingCode === selected.taskId" :disabled="!!submittingCode || !!deleting || !!openingRegeneration" data-testid="submit-generated-task-code-detail" @click="submitTaskCode(selected)">提交生成代码</el-button><section v-if="job?.result" class="generation-result" data-testid="generation-result">
             <dl class="result-info"><div><dt>结果文件</dt><dd>{{ resultFiles.length ? `${resultFiles.length} 个文件` : job.result.fileName }}</dd></div><div><dt>Git 状态</dt><dd>{{ gitResultStatus }}</dd></div><div v-if="resultArchive?.gitCommit"><dt>提交版本</dt><dd :title="resultArchive.gitCommit">{{ resultArchive.gitCommit.slice(0, 12) }}</dd></div></dl>
             <article v-for="file in resultFiles" :key="file.path" class="result-file"><h4>{{ file.path.split('/').pop() }}</h4><dl class="result-paths">
               <div><dt>生成服务器文件</dt><dd><RouterLink v-if="file.serverPath && resultServerId" :to="serverResultTarget(file.serverPath, true)" data-testid="generation-server-file-link" title="定位到生成服务器的文件目录">{{ file.serverPath }}</RouterLink><span v-else>{{ file.serverPath || '未记录生成服务器文件路径' }}</span></dd></div>

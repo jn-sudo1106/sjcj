@@ -34,7 +34,7 @@ def check_id(value):
     return value
 
 
-def snapshot(app, db, runtime):
+def snapshot(app, db, runtime, *, read_package=True):
     from .deployment_configuration import get_configuration
     runner = db.execute('SELECT * FROM runners WHERE runner_id=?', (runtime['runnerId'],)).fetchone()
     assignment = runtime.get('assignment') or {}
@@ -45,7 +45,7 @@ def snapshot(app, db, runtime):
         except Exception:
             pass
     manifest = {}
-    if assignment.get('releaseDigest'):
+    if read_package and assignment.get('releaseDigest'):
         try:
             with zipfile.ZipFile(io.BytesIO(app.artifacts.read(assignment['releaseDigest']))) as archive:
                 manifest = json.loads(archive.read('manifest.json'))
@@ -112,9 +112,9 @@ def control(app, runtime_id, revision, enabled):
     from .deployment_configuration import runtime_rows, control_runtime
     identifier = uuid.uuid4().hex
     with app.store.connect() as db:
-        row = next((item for item in runtime_rows(app, db) if item['runtimeId'] == runtime_id), None)
+        row = next((item for item in runtime_rows(app, db, verify=False) if item['runtimeId'] == runtime_id), None)
         if row:
-            insert_record(db, identifier, row, 'start' if enabled else 'stop', snapshot(app, db, row))
+            insert_record(db, identifier, row, 'start' if enabled else 'stop', snapshot(app, db, row, read_package=enabled))
             add_event(db, identifier, 'requested', '已请求启动' if enabled else '已请求停止')
     try:
         result = control_runtime(app, runtime_id, revision, enabled)
@@ -124,6 +124,12 @@ def control(app, runtime_id, revision, enabled):
                 complete(db, identifier, 'failed', str(exc))
                 add_event(db, identifier, 'validation', str(exc), 'error')
         raise
+    if row and enabled:
+        with app.store.connect() as db:
+            # Start can adopt a newer successful delivery and materialize a
+            # legacy binding. The log must describe the program actually sent.
+            db.execute('UPDATE runtime_operations SET runtime_id=?,assignment_id=?,snapshot_json=? WHERE record_id=?',
+                       (result['runtimeId'], result['assignmentId'], json.dumps(snapshot(app, db, result), ensure_ascii=False), identifier))
     if row and not enabled:
         with app.store.connect() as db:
             live = db.execute("SELECT 1 FROM runtime_operations WHERE runtime_id=? AND kind='run' AND status IN ('checking','running')", (runtime_id,)).fetchone()

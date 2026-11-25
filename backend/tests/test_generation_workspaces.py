@@ -9,10 +9,38 @@ class StableWorkspacesTest(unittest.TestCase):
         from backend.runner_management.generation_parallel import bind_paths
         canonical = {'prjDir': '/work/101', 'codeDir': '/work/101/code/sites', 'inputFileDir': '/work/101/input', 'outputFileDir': '/work/101/output'}
         execution = {key: value.replace('/work/101', '/work/101/.agents/slot') for key, value in canonical.items()}
+        execution['inputFileDir'] = canonical['inputFileDir']
         body = {'userPrompt': '/work/101/code/sites/a.py /work/101/input/demo.py {{code_dir}} /work/1010/demo.py'}
         updated = bind_paths(body, canonical, execution)
-        self.assertEqual(updated['userPrompt'], '/work/101/.agents/slot/code/sites/a.py /work/101/.agents/slot/input/demo.py {{code_dir}} /work/1010/demo.py')
+        self.assertEqual(updated['userPrompt'], '/work/101/.agents/slot/code/sites/a.py /work/101/input/demo.py {{code_dir}} /work/1010/demo.py')
         self.assertNotIn('.agents', body['userPrompt'])
+
+    def test_parallel_agents_keep_node_input_and_isolate_generated_outputs(self):
+        from backend.runner_management.generation_parallel import isolate, bind_paths
+        from backend.runner_management.model_interfaces import agent_directories, workbuddy_request
+        from backend.runner_management.generation_prompt_context import variables, compose
+        import json
+        for root in (r'D:\coder\workspace', '/work'):
+            with self.subTest(root=root):
+                agent = {'id': 'test', 'kind': 'agent', 'model': 'hy3', 'prjDir': root,
+                         '_workspaceDirectory': '1401218', '_codeSubdirectory': 'sites',
+                         'endpoint': 'http://192.168.1.174:6000/wb/agent', 'cdpPort': 9222}
+                canonical = agent_directories(agent, 'task-1')
+                other = {**agent, 'cdpPort': 9223}
+                isolate(agent, canonical); isolate(other, canonical)
+                execution, second = agent_directories(agent, 'task-1'), agent_directories(other, 'task-2')
+                self.assertEqual(execution['inputFileDir'], canonical['inputFileDir'])
+                self.assertEqual(second['inputFileDir'], canonical['inputFileDir'])
+                self.assertNotEqual(execution['codeDir'], second['codeDir'])
+                self.assertNotEqual(execution['outputFileDir'], second['outputFileDir'])
+                body = {'url': 'https://example.com', 'userPrompt': '读取 {{input_file_dir}}/demo.py；输入目录 ' + canonical['inputFileDir']}
+                body = bind_paths(body, canonical, execution)
+                prompt = compose('', body['userPrompt'], variables(body, 'example.py', execution))
+                request = json.loads(workbuddy_request(agent, prompt, 'task-1').data)
+                self.assertEqual(request['input_file_dir'], canonical['inputFileDir'])
+                self.assertIn('输入目录：' + canonical['inputFileDir'], request['prompt'])
+                self.assertIn(canonical['inputFileDir'] + '/demo.py', request['prompt'])
+                self.assertNotIn(execution['prjDir'] + '/input', request['prompt'])
 
     def test_output_subdirectory_keeps_root_and_updates_windows_and_unix_code_paths(self):
         from backend.runner_management.model_interfaces import agent_directories

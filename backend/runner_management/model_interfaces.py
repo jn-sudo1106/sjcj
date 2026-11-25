@@ -308,7 +308,7 @@ def agent_directories(selected, task_id=None):
     if suffix:
         code = str(path_type(code).joinpath(*suffix.split('/')))
     return {'instanceId': instance_id, 'taskId': task_id, 'prjDir': str(base),
-            'inputFileDir': str(base / 'input'), 'codeDir': code, 'outputFileDir': str(base / 'output'),
+            'inputFileDir': selected.get('_inputDirectory') or str(base / 'input'), 'codeDir': code, 'outputFileDir': str(base / 'output'),
             'taskRecordPath': str(base / 'tasks' / (task_id + '.json'))}
 
 

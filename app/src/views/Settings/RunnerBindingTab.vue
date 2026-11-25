@@ -246,23 +246,8 @@ function deliveryTime(row: RuntimeConfiguration) {
   const item = row.binding?.delivery
   return item ? `${item.finishedAt ? '完成' : '提交'}于 ${time(item.finishedAt || item.requestedAt)}` : '尚未手动下发'
 }
-function deliveryMismatch(row: RuntimeConfiguration) {
-  if (row.codeVerificationPending) return false
-  return row.assignment?.processorType === 'deployment-entry' && row.binding?.delivery?.status === 'success'
-    && (row.deliveredCodeMatches === undefined ? row.binding.delivery.layoutRevision !== row.appliedRevision : !row.deliveredCodeMatches)
-}
 function deliveryAdvice(row: RuntimeConfiguration) {
-  if (row.codeVerificationPending) return row.binding?.delivery?.status === 'success' && (row.binding.delivery.layoutRevision !== row.layoutRevision || row.appliedRevision !== row.layoutRevision)
-    ? '配置版本有变化，启动时将校验代码与入口' : ''
-  if (row.binding?.delivery?.status === 'success' && row.latestCodeMatchesDelivery) {
-    return row.appliedRevision !== row.layoutRevision || !row.assignment ? '代码已就绪，编辑保存采用启动配置即可，无需重新下发' : ''
-  }
-  if (deliveryMismatch(row)) {
-    if (row.binding?.delivery?.layoutRevision === row.layoutRevision) return '代码已下发，编辑保存采用该版本后再启动'
-    if (row.appliedRevision === row.layoutRevision) return '采用的配置尚未下发，请重新下发代码'
-    return '下发版本与采用版本不一致，请编辑保存后重新下发'
-  }
-  return row.binding?.delivery?.status === 'success' && row.binding.delivery.layoutRevision !== row.layoutRevision ? '目录有更新，待重新下发' : ''
+  return row.binding?.delivery?.status === 'success' ? '启动使用最近下发成功的文件' : ''
 }
 function canRestoreProcesses(row: RuntimeConfiguration) {
   const machine = machineMap.value.get(row.runnerId)
@@ -288,7 +273,7 @@ async function controlProgram(row: RuntimeConfiguration, start: boolean) {
   controlling.value = row.runtimeId; delete programErrors.value[row.runtimeId]; stopPoll(); ++request
   try {
     const item = await (start ? runnerManagementApi.startRuntimeProgram : runnerManagementApi.stopRuntimeProgram)(row.runtimeId, row.revision)
-    rows.value = rows.value.map(value => value.runtimeId === item.runtimeId ? item : value)
+    rows.value = rows.value.map(value => value.runtimeId === row.runtimeId ? item : value)
     ElMessage.success(start ? '启动指令已提交，等待 Runner 上报进程' : '停止指令已提交，等待 Runner 停止进程')
   } catch (e) { programErrors.value[row.runtimeId] = problem(e) }
   finally { controlling.value = ''; poll() }
@@ -500,9 +485,8 @@ onUnmounted(() => { active = false; ++request; ++gitVersionRequest; stopPoll() }
               </td>
               <td>
                 <div class="rb-program-status" data-testid="binding-program-status"><el-tag size="small" :type="programState(row).type">{{ programState(row).label }}</el-tag><small v-if="programState(row).detail" :title="programState(row).detail">{{ programState(row).detail }}</small></div>
-                <div class="rb-statuses"><el-tag size="small" :type="row.appliedRevision && row.appliedRevision === row.layoutRevision ? 'success' : 'info'">{{ row.appliedRevision ? row.appliedRevision === row.layoutRevision ? '已采用' : '配置有更新' : '原有配置' }}</el-tag><el-tag size="small" :type="row.binding?.delivery?.status === 'failed' ? 'danger' : deliveryMismatch(row) ? 'warning' : row.binding?.delivery?.status === 'success' ? 'success' : 'info'" data-testid="binding-delivery-status">{{ deliveryMismatch(row) ? row.latestCodeMatchesDelivery ? '配置待采用' : '版本不一致' : deliveryStates[row.binding?.delivery?.status || 'none'] }}</el-tag></div>
+                <div class="rb-statuses"><el-tag size="small" :type="row.appliedRevision && row.appliedRevision === row.layoutRevision ? 'success' : 'info'">{{ row.appliedRevision ? row.appliedRevision === row.layoutRevision ? '已采用' : '配置有更新' : '原有配置' }}</el-tag><el-tag size="small" :type="row.binding?.delivery?.status === 'failed' ? 'danger' : row.binding?.delivery?.status === 'success' ? 'success' : 'info'" data-testid="binding-delivery-status">{{ deliveryStates[row.binding?.delivery?.status || 'none'] }}</el-tag></div>
                 <small :title="deliveryTime(row)">{{ deliveryTime(row) }}</small>
-                <small v-if="row.appliedRevision && row.appliedRevision !== row.layoutRevision">编辑保存以采用新配置</small>
                 <small v-if="!row.assignment && configuredEntry(row)" class="rb-code-advice">入口来自部署配置，启动时自动采用</small>
                 <small v-if="deliveryAdvice(row)" class="rb-code-advice" :title="deliveryAdvice(row)" data-testid="binding-delivery-advice">{{ deliveryAdvice(row) }}</small>
                 <small v-if="row.binding?.delivery?.error" class="rb-inline-error" :title="row.binding.delivery.error">{{ row.binding.delivery.error }}</small>

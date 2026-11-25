@@ -85,7 +85,10 @@ def save_config(app, body):
                 if not allows(listing(app)['items'], data['interfaceId']):
                     raise ApiError('所选模型接口不存在或已停用')
                 from .generation_references import normalize
-                data['referenceFiles'] = normalize(incoming.get('referenceFiles', []))
+                # Older clients and prompt-only saves omit this optional field.
+                # Only an explicit empty list cancels previously selected inputs.
+                previous = record.get('generation') or {}
+                data['referenceFiles'] = normalize(incoming.get('referenceFiles', previous.get('referenceFiles', [])))
                 record['generation'] = data
         record['updatedAt'] = stamp()
         with app.store.connect() as db:

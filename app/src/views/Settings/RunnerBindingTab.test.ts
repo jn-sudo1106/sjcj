@@ -380,13 +380,13 @@ it('目录取部署配置变量，区分当前目标与上次落盘位置，不�
   expect(wrapper.find('[data-testid="binding-full-path"]').exists()).toBe(false)
   expect(wrapper.find('[data-testid="binding-installed-path"]').exists()).toBe(false)
   expect(wrapper.text()).toContain('配置有更新')
-  expect(wrapper.text()).toContain('目录有更新，待重新下发')
+  expect(wrapper.text()).toContain('启动使用最近下发成功的文件')
   vi.mocked(runnerManagementApi.deploymentConfigurations).mockResolvedValue([{ ...configuration, queueName: '', directoryTemplate: 'shared/python' }])
   await wrapper.get('[aria-label="刷新机器配置"]').trigger('click'); await flushPromises()
   wrapper.unmount()
 })
 
-it('下发成功但版本不一致时明确提示采用或重新下发，匹配采用版本时显示已下发', async () => {
+it('下发成功即显示已下发，旧采用版本与配置版本不再阻止启动', async () => {
   const delivery: DirectoryDelivery = { deliveryId: 'd1', bindingType: 'deployment', ownerId: configuration.deploymentId,
     runnerId: existing.runnerId, status: 'success', layoutRevision: 'layout-v1', artifactDigest: '', targetPath: '123/prod',
     installedPath: '', requestedAt: '', startedAt: null, finishedAt: '', error: '' }
@@ -394,24 +394,24 @@ it('下发成功但版本不一致时明确提示采用或重新下发，匹配�
     binding: { ...existing.binding!, delivery } }
   vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([binding])
   const { wrapper } = await setup()
-  expect(wrapper.get('[data-testid="binding-delivery-status"]').text()).toBe('版本不一致')
-  expect(wrapper.get('[data-testid="binding-delivery-advice"]').text()).toContain('代码已下发，编辑保存采用该版本后再启动')
+  expect(wrapper.get('[data-testid="binding-delivery-status"]').text()).toBe('已下发')
+  expect(wrapper.get('[data-testid="binding-delivery-advice"]').text()).toBe('启动使用最近下发成功的文件')
   binding.appliedRevision = 'layout-v1'; delivery.layoutRevision = 'old'
   await wrapper.get('[aria-label="刷新机器配置"]').trigger('click'); await flushPromises()
-  expect(wrapper.get('[data-testid="binding-delivery-status"]').text()).toBe('版本不一致')
-  expect(wrapper.get('[data-testid="binding-delivery-advice"]').text()).toContain('采用的配置尚未下发，请重新下发代码')
+  expect(wrapper.get('[data-testid="binding-delivery-status"]').text()).toBe('已下发')
+  expect(wrapper.text()).not.toContain('编辑保存')
   binding.appliedRevision = 'another-version'
   await wrapper.get('[aria-label="刷新机器配置"]').trigger('click'); await flushPromises()
-  expect(wrapper.get('[data-testid="binding-delivery-advice"]').text()).toContain('下发版本与采用版本不一致')
+  expect(wrapper.get('[data-testid="binding-delivery-advice"]').text()).toBe('启动使用最近下发成功的文件')
   delivery.layoutRevision = binding.appliedRevision
   await wrapper.get('[aria-label="刷新机器配置"]').trigger('click'); await flushPromises()
   expect(wrapper.get('[data-testid="binding-delivery-status"]').text()).toBe('已下发')
   wrapper.unmount()
 })
 
-it('启动校验失败展示完整原因及操作步骤，并保留停止状态', async () => {
+it('入口尚未下发时展示真实错误，并保留停止状态', async () => {
   const binding = { ...existing, assignment: { ...existing.assignment!, enabled: false, processorType: 'deployment-entry' } }
-  const message = '机器配置尚未采用启动文件「newslink.py」。请点击「编辑 → 保存配置」采用入口；已下发且代码未变化时可直接启动。'
+  const message = '入口程序「newslink.py」尚未下发到该机器，请先下发此文件'
   vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([binding])
   vi.mocked(runnerManagementApi.startRuntimeProgram).mockRejectedValue(new Error(message))
   const machines = await runnerManagementApi.instances()
@@ -426,7 +426,7 @@ it('启动校验失败展示完整原因及操作步骤，并保留停止状态'
   wrapper.unmount()
 })
 
-it('仅修改入口时显示配置待采用，采用后代码相同无需重新下发', async () => {
+it('仅修改入口或旧快照不匹配时仍展示已下发，不要求手工采用', async () => {
   const delivery: DirectoryDelivery = { deliveryId: 'd1', bindingType: 'deployment', ownerId: configuration.deploymentId,
     runnerId: existing.runnerId, status: 'success', layoutRevision: 'old-delivery', artifactDigest: '', targetPath: '123/prod',
     installedPath: '', requestedAt: '', startedAt: null, finishedAt: '', error: '' }
@@ -434,12 +434,13 @@ it('仅修改入口时显示配置待采用，采用后代码相同无需重新�
     assignment: { ...existing.assignment!, processorType: 'deployment-entry' }, binding: { ...existing.binding!, delivery } }
   vi.mocked(runnerManagementApi.runtimeConfigurations).mockResolvedValue([binding])
   const { wrapper } = await setup()
-  expect(wrapper.get('[data-testid="binding-delivery-status"]').text()).toBe('配置待采用')
-  expect(wrapper.get('[data-testid="binding-delivery-advice"]').text()).toContain('无需重新下发')
+  expect(wrapper.get('[data-testid="binding-delivery-status"]').text()).toBe('已下发')
+  expect(wrapper.text()).not.toContain('配置待采用')
+  expect(wrapper.text()).not.toContain('编辑保存')
   binding.appliedRevision = binding.layoutRevision; binding.deliveredCodeMatches = true
   await wrapper.get('[aria-label="刷新机器配置"]').trigger('click'); await flushPromises()
   expect(wrapper.get('[data-testid="binding-delivery-status"]').text()).toBe('已下发')
-  expect(wrapper.find('[data-testid="binding-delivery-advice"]').exists()).toBe(false)
+  expect(wrapper.get('[data-testid="binding-delivery-advice"]').text()).toBe('启动使用最近下发成功的文件')
   expect(runnerManagementApi.deliverDirectoryBinding).not.toHaveBeenCalled()
   wrapper.unmount()
 })
@@ -512,7 +513,8 @@ it('手工新建直达新建表单而非旧列表，列表不执行代码核验�
     assignment: { ...existing.assignment!, processorType: 'deployment-entry' },
     binding: { ...existing.binding!, delivery: { status: 'success', layoutRevision: 'older' } as DirectoryDelivery } }])
   const { wrapper, router } = await setup(true, 'r-1')
-  expect(wrapper.text()).toContain('配置版本有变化，启动时将校验代码与入口')
+  expect(wrapper.text()).toContain('启动使用最近下发成功的文件')
+  expect(wrapper.text()).not.toContain('启动时将校验')
   expect(wrapper.text()).not.toContain('版本不一致')
   await wrapper.get('[data-testid="binding-manual-deployment"]').trigger('click'); await flushPromises()
   expect(router.currentRoute.value.query).toEqual({ tab: 'directory-layout', create: '1', returnTab: 'runners', runnerId: 'r-1' })

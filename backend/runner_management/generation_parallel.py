@@ -8,6 +8,8 @@ import re
 def isolate(selected, canonical):
     from .agent_pool import resource_key
     selected['_publishedWorkspace'] = canonical
+    # Existing reference files belong to the node, not an agent's output slot.
+    selected['_inputDirectory'] = canonical['inputFileDir']
     selected['_workspaceDirectory'] += '/.agents/' + resource_key(selected).split(':')[-1][:32]
 
 

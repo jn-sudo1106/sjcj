@@ -26,6 +26,41 @@ function render(rowTask: TaskInst = task, role = 'admin', sourceScopeId?: string
   } } })
 }
 describe('智能体任务', () => {
+  it('手动提交迟到文件后更新当前任务结果，不调用重新生成接口', async () => {
+    vi.spyOn(runnerManagementApi, 'codeGenerationTasks').mockResolvedValue({ list: [task], total: 1 })
+    vi.mocked(runnerManagementApi.mqCodeJobSummaries).mockResolvedValue({ items: [{ taskId: task.taskId, status: 'failed' }] } as never)
+    const failed = { taskId: task.taskId, status: 'failed', callbackSent: true, message: '未生成主脚本', stages: [], output: '', serverId: 'server-1', configId: 'node-3', queue: '', createdAt: '' } as const
+    vi.spyOn(runnerManagementApi, 'mqCodeJob').mockResolvedValue({ job: { ...failed, stages: [] } })
+    const archive = { archiveId: 'archive', status: 'committed', pushed: true, gitCommit: 'abc123', repoId: 'repo', directoryId: 'dir', directoryPath: 'links', files: [{ path: 'links/node-3/a.py', serverPath: 'D:\\work\\a.py', size: 10, sha256: 'hash', relativePath: 'node-3/a.py' }] }
+    const submit = vi.spyOn(runnerManagementApi, 'submitGeneratedTaskCode').mockResolvedValue({ job: { ...failed, status: 'succeeded', message: '生成代码已提交并推送 Git', stages: [], result: { fileName: 'a.py', code: 'VALUE = 1', previewPath: 'links/node-3/a.py', warnings: [], archive } } } as never)
+    const regenerate = vi.spyOn(runnerManagementApi, 'regenerateCodeTask')
+    const wrapper = render(); await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '查看详情')!.trigger('click'); await flushPromises()
+    await wrapper.get('[data-testid="submit-generated-task-code-detail"]').trigger('click'); await flushPromises()
+    expect(submit).toHaveBeenCalledWith(task.taskId)
+    expect(regenerate).not.toHaveBeenCalled()
+    expect(wrapper.get(`[data-testid="code-task-status-${task.taskId}"]`).text()).toBe('已完成')
+    expect(wrapper.get('[data-testid="generation-result"]').text()).toContain('已提交并推送')
+    expect(wrapper.get('[data-testid="generation-result"]').text()).toContain('links/node-3/a.py')
+    wrapper.unmount()
+  })
+  it('运行中和只读账号不显示手动提交入口，失败时保留真实错误', async () => {
+    vi.spyOn(runnerManagementApi, 'codeGenerationTasks').mockResolvedValue({ list: [task], total: 1 })
+    vi.mocked(runnerManagementApi.mqCodeJobSummaries).mockResolvedValue({ items: [{ taskId: task.taskId, status: 'running' }] } as never)
+    let wrapper = render(); await flushPromises()
+    expect(wrapper.find('[data-testid="submit-generated-task-code"]').exists()).toBe(false)
+    wrapper.unmount()
+    vi.mocked(runnerManagementApi.mqCodeJobSummaries).mockResolvedValue({ items: [{ taskId: task.taskId, status: 'failed' }] } as never)
+    wrapper = render(task, 'reader'); await flushPromises()
+    expect(wrapper.find('[data-testid="submit-generated-task-code"]').exists()).toBe(false)
+    wrapper.unmount()
+    vi.spyOn(runnerManagementApi, 'submitGeneratedTaskCode').mockRejectedValue(new Error('该生成目录已被后续任务使用'))
+    wrapper = render(); await flushPromises()
+    await wrapper.get('[data-testid="submit-generated-task-code"]').trigger('click'); await flushPromises()
+    expect(wrapper.get('[data-testid="generation-submission-error"]').text()).toContain('该生成目录已被后续任务使用')
+    expect(wrapper.get(`[data-testid="code-task-status-${task.taskId}"]`).text()).toBe('生成失败')
+    wrapper.unmount()
+  })
   it('源任务入口始终带当前源筛选，不能切换到其他源', async () => {
     vi.spyOn(runnerManagementApi, 'codeGenerationTasks').mockResolvedValue({ list: [], total: 0 })
     const wrapper = render(task, 'admin', '430024910'); await flushPromises()

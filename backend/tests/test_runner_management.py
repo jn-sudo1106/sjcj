@@ -677,7 +677,56 @@ class ManagementIntegrationTest(unittest.TestCase):
             self.request('/api/runner-management/runtime-configurations/missing/start', {'revision': ''})
         self.assertEqual(missing.exception.code, 404)
 
-    def test_start_validation_reports_entry_delivery_stage_and_version_cause(self):
+    def test_start_executes_latest_selected_delivery_without_resaving_or_reading_newer_git(self):
+        _, config, runner, runtime, _ = self.configured_runtime_fixture()
+        self.runner = runner
+        runtime = self.deliver_runtime_fixture(config, runner)
+        old_digest = runtime['assignment']['releaseDigest']
+        repository = self.request('/api/runner-management/settings/code-repos')[0]
+        root = Path(repository['path'])
+        source = root / 'processor/main.py'
+        delivered_code = 'from pathlib import Path\nimport time\nPath("started-version").write_text("delivered-v2")\ntime.sleep(61)\n'
+        source.write_text(delivered_code, encoding='utf-8')
+        self.app.git(root, 'add', '--', 'processor/main.py')
+        self.app.git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-m', 'Delivered version')
+        commit = self.app.git(root, 'rev-parse', 'HEAD').strip()
+        config_route = '/api/runner-management/deployment-configurations/' + config['deploymentId']
+        config = self.request(config_route, {**config, 'nodes': [
+            {**node, 'gitCommit': commit} if node['id'] == 'main' else node for node in config['nodes']]})
+        runtime = self.deliver_runtime_fixture(config, runner, scope='selected', paths=['news/main.py'])
+        self.assertEqual(runtime['assignment']['releaseDigest'], old_digest)
+        installed_registry = (runner.directory / 'configured/version.json').read_bytes()
+        source.write_text('raise RuntimeError("not delivered")\n', encoding='utf-8')
+        self.app.git(root, 'add', '--', 'processor/main.py')
+        self.app.git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-m', 'Undelivered version')
+        commit = self.app.git(root, 'rev-parse', 'HEAD').strip()
+        self.request(config_route, {**config, 'directoryTemplate': 'not-delivered', 'nodes': [
+            {**node, 'gitCommit': commit} if node['id'] == 'main' else node for node in config['nodes']]})
+        current = next(row for row in self.request('/api/runner-management/runtime-configurations') if row['runtimeId'] == runtime['runtimeId'])
+        route = '/api/runner-management/runtime-configurations/' + runtime['runtimeId']
+        with patch('backend.runner_management.deployment_configuration.snapshot_files', side_effect=AssertionError('No Git reads at start')):
+            started = self.request(route + '/start', {'revision': current['revision']})
+        self.assertNotEqual(started['assignment']['releaseDigest'], old_digest)
+        self.assertEqual(started['directoryTemplate'], 'configured')
+        assignment = runner.get('/api/runners/me/assignments')[0]
+        self.assertTrue(assignment['operationId'])
+        self.assertEqual(assignment['logSnapshot']['releaseDigest'], started['assignment']['releaseDigest'])
+        self.assertEqual(assignment['logSnapshot']['directoryTemplate'], 'configured')
+        runner.tick()
+        marker = runner.directory / 'configured/started-version'
+        deadline = time.monotonic() + 5
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(.05)
+        self.assertEqual(marker.read_text(), 'delivered-v2')
+        self.assertEqual(len(runner.processes), 2)
+        self.assertEqual((runner.directory / 'configured/news/main.py').read_text(encoding='utf-8'), delivered_code)
+        self.assertEqual((runner.directory / 'configured/version.json').read_bytes(), installed_registry)
+        with patch.object(self.app.artifacts, 'read', side_effect=AssertionError('Stop must not read packages')):
+            self.request(route + '/stop', {'revision': started['revision']})
+        runner.tick()
+        self.assertEqual(runner.processes, {})
+
+    def test_start_requires_completed_delivery_and_automatically_adopts_it(self):
         _, config, runner, runtime, payload = self.configured_runtime_fixture()
         self.runner = runner
         route = '/api/runner-management/runtime-configurations/' + runtime['runtimeId']
@@ -697,7 +746,6 @@ class ManagementIntegrationTest(unittest.TestCase):
             return message
         error_contains('尚未下发代码', '「下发代码」')
         job = self.request(delivery_route + '/deliver', {'revision': config['revision']})
-        old_digest = job['artifactDigest']
         error_contains('等待 Runner 处理')
         job_route = '/api/runners/me/directory-deliveries/' + job['deliveryId']
         self.request(job_route + '/claim', {}, token=runner.identity['token'])
@@ -712,21 +760,27 @@ class ManagementIntegrationTest(unittest.TestCase):
         job_route = '/api/runners/me/directory-deliveries/' + job['deliveryId']
         self.request(job_route + '/claim', {}, token=runner.identity['token'])
         self.request(job_route + '/result', {'status': 'success', 'installedPath': str(runner.directory / 'configured')}, token=runner.identity['token'])
-        error_contains('已下发代码与当前启动配置不匹配', '编辑 → 保存配置', '无需重新下发')
-        adopted = self.request('/api/runner-management/runtime-configurations', {
-            **payload, 'runtimeId': runtime['runtimeId'], 'revision': current()['revision'], 'layoutRevision': changed['revision']})
-        with self.app.store.connect() as db:
-            db.execute('UPDATE directory_deliveries SET layout_revision=?,artifact_digest=? WHERE delivery_id=?', (config['revision'], old_digest, job['deliveryId']))
-        error_contains('已采用新版本', '上次下发的仍是其他版本', '重新下发代码')
+        with patch('backend.runner_management.deployment_configuration.snapshot_files', side_effect=AssertionError('Start must not read current Git')), \
+             patch('backend.runner_management.deployment_configuration.delivery_compatibility', side_effect=AssertionError('Start must not compare old snapshots')):
+            adopted = self.request(route + '/start', {'revision': current()['revision']})
+        self.assertTrue(adopted['assignment']['enabled'])
+        self.assertEqual(adopted['entryPoint'], 'renamed/main.py')
+        self.assertEqual(adopted['appliedRevision'], changed['revision'])
+        self.request(route + '/stop', {'revision': adopted['revision']})
         changed = self.request(config_route, {**changed, 'name': '再次修改配置', 'directoryTemplate': 'other-root'})
-        error_contains('已下发代码与机器采用的配置版本不一致', '编辑 → 保存配置')
+        adopted = self.request(route + '/start', {'revision': current()['revision']})
+        self.assertEqual(adopted['directoryTemplate'], 'configured')
+        self.assertNotEqual(adopted['appliedRevision'], changed['revision'])
+        self.request(route + '/stop', {'revision': adopted['revision']})
         # Older saved bindings can have an assignment but no adopted entry.
         with self.app.store.connect() as db:
             key = 'runtime-config:' + runtime['runtimeId']
             document = json.loads(db.execute('SELECT setting_value FROM settings WHERE setting_key=?', (key,)).fetchone()['setting_value'])
             document['executionEntry'] = ''
             db.execute('UPDATE settings SET setting_value=? WHERE setting_key=?', (json.dumps(document), key))
-        error_contains('尚未采用启动文件「' + changed['entryPoint'] + '」', '编辑 → 保存配置')
+        adopted = self.request(route + '/start', {'revision': current()['revision']})
+        self.assertEqual(adopted['entryPoint'], changed['entryPoint'])
+        self.request(route + '/stop', {'revision': adopted['revision']})
         self.request(config_route, {**changed, 'entryPoint': '', 'clearEntryPoint': True})
         error_contains('未设置启动文件', '设为执行入口')
         self.assertEqual(current()['assignment']['releaseDigest'], adopted['assignment']['releaseDigest'])
@@ -786,9 +840,10 @@ class ManagementIntegrationTest(unittest.TestCase):
         stopped = self.request('/api/runner-management/runtime-configurations', {
             **payload, 'runtimeId': stopped['runtimeId'], 'revision': current()['revision'], 'layoutRevision': config['revision'], 'concurrency': 1})
         self.assertFalse(stopped['deliveredCodeMatches'])
-        with self.assertRaises(HTTPError) as changed_root:
-            self.request(route + '/start', {'revision': stopped['revision']})
-        self.assertIn('重新下发代码', json.load(changed_root.exception)['message'])
+        started = self.request(route + '/start', {'revision': stopped['revision']})
+        self.assertTrue(started['assignment']['enabled'])
+        self.assertEqual(started['directoryTemplate'], 'configured')
+        self.assertFalse((runner.directory / 'new-root').exists())
 
     def test_deployment_source_node_is_persisted_and_cannot_be_rebound(self):
         code, _, mapped, _ = self.directory_fixture()

@@ -2184,6 +2184,9 @@ class Handler(BaseHTTPRequestHandler):
         if sub == '/code-generation/tasks/regeneration' and method in ('GET', 'POST'):
             from .generation_regeneration import prepare, submit
             return prepare(app, (query.get('taskId') or [''])[0]) if method == 'GET' else submit(app, body.get('taskId', ''), body)
+        if sub == '/code-generation/tasks/commit' and method == 'POST':
+            from .generation_submission import submit
+            return submit(app, body.get('taskId'))
         if sub in ('/code-generation/tasks/delete', '/code-generation/tasks/delete-batch') and method == 'POST':
             from .database_generation import remove
             return remove(app, body)
