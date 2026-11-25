@@ -65,6 +65,13 @@ const props = defineProps<{
   describe: string
   describeLabel: string
   hidePromptByDefault: boolean
+  /**
+   * 节点类型编号（= NodeConfig.configType，规则 600 / 数据监控 610 / 网页抓取 90…）。
+   * 提示词表里同一 category + node_type_name 可能有多行：老行 node_type 是符号名（rule_processing、data_monitoring），
+   * 新行 node_type 就是类型编号（600、610）。只按名字取列表第一条会拿到 9 月的老模板，
+   * 无视用户在「系统设置 → 节点类型 → 提示词模板」里维护的那条（2026-11-25 实测 prompt 1 vs 74）。
+   */
+  nodeTypeCode?: string
 }>()
 const emit = defineEmits<{
   'update:open': [boolean]
@@ -74,6 +81,7 @@ const emit = defineEmits<{
   'update:modelProviderCode': [string]
   'update:modelCode': [string]
   'update:script': [string]
+  'update:describe': [string]
   'save-prompt-preview': [string]
   /** 用户点了左栏「保存」（区别于 loadPromptTemplate 自动回写：那条不算用户编辑） */
   'prompt-saved': []
@@ -89,6 +97,10 @@ function close() {
 
 // 系统提示词草稿：只在打开时从 props 重置，取消/关闭不回写
 const promptDraft = ref(props.systemPrompt)
+// 「规则处理描述」原来在左栏是只读的，但「生成脚本」要求它非空 —— 弹窗里能看到却填不进去（2026-11-25）。
+// 改成可编辑草稿：打开时从 props 重置，每次输入回写父组件 orchCfg.describe。
+const describeDraft = ref(props.describe)
+watch(() => props.open, (v) => { if (v) describeDraft.value = props.describe })
 const promptChoices = ref<PromptTemplateItem[]>([]), selectedPromptId = ref(props.promptTemplateId ?? 0)
 const promptSnapshot = ref(props.systemPrompt)
 const bindingSaving = ref(false)
@@ -149,6 +161,19 @@ async function loadProviderModelOptions() {
     providerLoading.value = false
   }
 }
+/**
+ * 默认模板：同一 category + node_type_name 下有多行时，优先取 node_type 与本节点类型编号一致的那条
+ * （600 规则处理 / 610 数据监控 / 90 网页抓取…），否则退回列表第一条（保持原有行为）。
+ * 原因见 props.nodeTypeCode 注释：不这样取会一直命中 9 月的符号名老模板，用户 11 月在系统设置里维护的模板不生效。
+ */
+function pickDefaultPrompt(choices: PromptTemplateItem[]): PromptTemplateItem | undefined {
+  const code = (props.nodeTypeCode ?? '').trim()
+  if (code) {
+    const byType = choices.find(item => (item.nodeType ?? '').trim() === code)
+    if (byType) return byType
+  }
+  return choices[0]
+}
 async function loadPromptTemplate(apply = true, restoreSelection = false) {
   const seq = ++promptRequestSeq
   promptLoading.value = true
@@ -166,7 +191,7 @@ async function loadPromptTemplate(apply = true, restoreSelection = false) {
       if (!selection.promptTemplateId) return
     }
     if (!apply) return
-    const chosen = selectedPromptId.value ? promptChoices.value.find(item => item.promptId === selectedPromptId.value) : promptChoices.value[0]
+    const chosen = selectedPromptId.value ? promptChoices.value.find(item => item.promptId === selectedPromptId.value) : pickDefaultPrompt(promptChoices.value)
     if (!chosen) { promptError.value = selectedPromptId.value ? '所选提示词已停用或不可用，保留当前内容，请重新选择' : '当前类型未配置启用的提示词'; return }
     const applied = renderPromptTemplateForNode(chosen, {
       promptListCategory: props.promptListCategory,
@@ -461,10 +486,11 @@ watch(
         </div>
         <textarea
           v-if="showDescribeInLeft"
+          v-model="describeDraft"
           class="wb-textarea wb-describe"
-          :value="describe"
-          readonly
-          placeholder="暂无描述"
+          data-testid="wb-describe"
+          :placeholder="`请用自然语言描述这次要做的事（${describeLabel}，生成脚本前必填）`"
+          @input="emit('update:describe', describeDraft)"
         />
         <textarea
           v-else
@@ -550,8 +576,7 @@ watch(
 .wb-stream-note.error { background: #fef2f2; color: #b91c1c; }
 .wb-textarea { flex: 1; width: 100%; margin: 0; border: 1px solid #dbe3ee; border-radius: 8px; background: #fff; color: var(--rc-text); font-size: 13px; line-height: 1.6; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 12px; outline: none; resize: none; box-sizing: border-box; }
 .wb-textarea:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
-.wb-describe { background: #f8fafc; color: var(--rc-text-2); cursor: default; }
-.wb-describe:focus { border-color: #dbe3ee; box-shadow: none; }
+.wb-describe { background: #fff; }
 .wb-code { background: #0f172a; color: #dbeafe; }
 .wb-code:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #1e3a5f; }
 .wb-splitter { flex: 0 0 10px; cursor: col-resize; position: relative; }
