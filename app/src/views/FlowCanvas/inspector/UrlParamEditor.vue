@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { configApi, paramApi, type Param } from '@/api'
-import { extractUrlParamIds, hasFragmentParams } from '@/utils/flow/urlParams'
+import { expandParameterizedUrl, extractUrlParamIds, hasFragmentParams } from '@/utils/flow/urlParams'
 import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
 
 const props = defineProps<{
@@ -62,6 +62,32 @@ async function loadOne(id: string) {
 }
 watch(refs, (ids) => { ids.forEach((id) => { if (!(id in details) && !loading[id]) loadOne(id) }) }, { immediate: true })
 onMounted(loadAvailable)
+
+/**
+ * 代入后的 URL 预览（2026-11-23 用户要「看参数设置的结果」）：
+ * 选了「当前源取值」= 只用这一个值；否则用参数生成的全部值（每个值一条 URL，多个参数做笛卡尔积，
+ * 与 expandParameterizedUrl 同口径），都没有再退到默认值。缺值的参数单独列出来——
+ * 那样跑出来 URL 里这个位置是空的，比给一条带空洞的 URL 更好懂。
+ */
+const PREVIEW_SHOWN = 3
+const urlPreview = computed(() => {
+  const ids = tokenIds.value
+  // 绑了参数但 URL 里没有占位：说清楚「没有可代入的地方」，别让人以为参数会改 URL（参数也可能用在登录等别处，所以只说 URL）
+  if (!ids.length) return refs.value.length ? { pending: false as const, noToken: true as const, missing: [], urls: [], total: 0, truncated: false } : null
+  if (ids.some((id) => loading[id] || details[id] === undefined)) return { pending: true as const }
+  const valuesByParam: Record<string, string[]> = {}
+  for (const id of ids) {
+    const pinned = props.paramValues[id]
+    const fallback = details[id]?.defaultValue
+    valuesByParam[id] = pinned ? [pinned] : candidates[id]?.length ? candidates[id]! : fallback ? [fallback] : []
+  }
+  const missing = ids.filter((id) => !valuesByParam[id]!.length)
+  if (missing.length) {
+    return { pending: false as const, missing: missing.map((id) => details[id]?.name ? `${details[id]!.name}（${id}）` : id), urls: [], total: 0, truncated: false }
+  }
+  const result = expandParameterizedUrl(props.url, valuesByParam)
+  return { pending: false as const, missing: [], urls: result.urls.slice(0, PREVIEW_SHOWN), total: result.total, truncated: result.truncated }
+})
 
 function valueOf(id: string): string {
   return props.paramValues[id] || details[id]?.defaultValue || candidates[id]?.[0] || ''
@@ -177,6 +203,18 @@ function kindLabel(kind: Param['kind']) {
         </template>
         <template v-else><div class="upe-row-head"><span class="upe-id">{{ id }}</span><span class="upe-missing">参数不存在</span><button class="upe-link danger" type="button" @click="unbind(id)">解绑</button></div></template>
       </div>
+      <div v-if="urlPreview" class="upe-preview" data-testid="url-param-preview">
+        <label>代入后的 URL</label>
+        <div v-if="urlPreview.pending" class="muted">取值查询中…</div>
+        <div v-else-if="'noToken' in urlPreview" class="muted" data-testid="url-param-preview-notoken">{{ props.url ? '当前 URL 里没有参数占位（$PARAM$_参数ID），已绑定的参数不会代入 URL。' : '当前节点没有 URL，没有可代入参数的地方。' }}</div>
+        <div v-else-if="urlPreview.missing.length" class="upe-preview-miss" data-testid="url-param-preview-missing">
+          {{ urlPreview.missing.join('、') }} 没有可用取值（未选当前源取值、没有默认值，生成值也为空），运行时 URL 里这个位置会是空的。可到「规则资产 → 参数中心」打开参数点「生成值预览」核对。
+        </div>
+        <template v-else>
+          <div v-for="u in urlPreview.urls" :key="u" class="upe-preview-url" :title="u">{{ u }}</div>
+          <div v-if="urlPreview.total > urlPreview.urls.length" class="muted">共 {{ urlPreview.truncated ? `超过 ${urlPreview.total}` : urlPreview.total }} 条 URL，仅显示前 {{ urlPreview.urls.length }} 条</div>
+        </template>
+      </div>
       <ParamEditorDrawer v-if="!props.templateDefaults" v-model="drawer.visible" :param="drawer.param" @saved="onSaved" />
     </div>
   </div>
@@ -194,5 +232,9 @@ function kindLabel(kind: Param['kind']) {
 .upe-empty { color: var(--rc-muted); font-size: 11px; line-height: 1.6; }
 .upe-warn { font-size: 11px; color: var(--rc-warn, #d97706); background: var(--rc-warn-bg, #fef3c7); border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; line-height: 1.5; }
 .upe-row { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--rc-border-soft); font-size: 12px; }.upe-row-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }.upe-identity { display: flex; align-items: center; gap: 7px; min-width: 0; flex-wrap: wrap; }.upe-id { color: var(--rc-text-2); font-family: var(--rc-mono, ui-monospace, monospace); }.upe-name { font-weight: 600; }.upe-meta, .muted { color: var(--rc-faint); font-size: 11px; }.upe-row-actions { display: inline-flex; gap: 10px; flex: none; white-space: nowrap; }.upe-override { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 7px; }.upe-override label { color: var(--rc-muted); font-size: 11px; white-space: nowrap; }.upe-value { min-width: 0; height: 30px; padding: 0 8px; font-size: 12px; }.upe-link { border: 0; background: transparent; padding: 0; color: var(--rc-primary-ink); font-size: 11px; cursor: pointer; }.upe-link.danger, .upe-missing { color: var(--rc-error, #dc2626); }
+.upe-preview { margin-top: 10px; padding: 8px 9px; border: 1px solid #dbeafe; border-radius: 7px; background: #f8fbff; display: grid; gap: 4px; min-width: 0; }
+.upe-preview label { color: var(--rc-muted); font-size: 11px; font-weight: 600; }
+.upe-preview-url { font-family: var(--rc-mono, ui-monospace, monospace); font-size: 11px; color: var(--rc-text-2); word-break: break-all; }
+.upe-preview-miss { font-size: 11px; line-height: 1.5; color: var(--rc-warn, #d97706); }
 @media (max-width: 520px) { .upe-row-head { align-items: flex-start; flex-direction: column; gap: 5px; }.upe-row-actions { padding-left: 0; }.upe-override { grid-template-columns: 1fr; gap: 4px; } }
 </style>

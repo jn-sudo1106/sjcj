@@ -33,6 +33,52 @@ describe('UrlParamEditor', () => {
   })
 
 
+  describe('代入后的 URL 预览（1123）', () => {
+    afterEach(() => { vi.restoreAllMocks() })
+    const stubs = { 'el-drawer': { template: '<div><slot /></div>' } }
+    const setup = (values: Record<string, string[]>, defaults: Record<string, string> = {}) => {
+      vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({ total: 0, list: [] })
+      vi.spyOn(paramApi, 'paramDetail').mockImplementation(async (id: string) => ({ paramId: id, name: id === '1035' ? 'A股-股票ID' : '日期', kind: 'database', defaultValue: defaults[id] ?? '' }) as never)
+      vi.spyOn(paramApi, 'genValues').mockImplementation(async (id: string) => values[id] ?? [])
+    }
+    const url = 'https://basic.10jqka.com.cn/{x}?code=$PARAM$_1035&d=$PARAM$_1036'
+
+    it('没选当前源取值：每个生成值一条 URL，多个参数笛卡尔积，超过 3 条给总数', async () => {
+      setup({ '1035': ['600519', '000858'], '1036': ['2026', '2025'] })
+      const w = mount(UrlParamEditor, { props: { url, paramRefs: ['1035', '1036'], paramValues: {} }, global: { stubs } })
+      await flushPromises()
+      const box = w.get('[data-testid="url-param-preview"]')
+      expect(box.findAll('.upe-preview-url').map((n) => n.text())).toEqual([
+        'https://basic.10jqka.com.cn/{x}?code=600519&d=2026',
+        'https://basic.10jqka.com.cn/{x}?code=600519&d=2025',
+        'https://basic.10jqka.com.cn/{x}?code=000858&d=2026',
+      ])
+      expect(box.text()).toContain('共 4 条 URL，仅显示前 3 条')
+    })
+
+    it('选了当前源取值只用这一个值；都没有时退到默认值', async () => {
+      setup({ '1035': ['600519', '000858'], '1036': [] }, { '1036': '2024' })
+      const w = mount(UrlParamEditor, { props: { url, paramRefs: ['1035', '1036'], paramValues: { '1035': '000858' } }, global: { stubs } })
+      await flushPromises()
+      expect(w.findAll('.upe-preview-url').map((n) => n.text())).toEqual(['https://basic.10jqka.com.cn/{x}?code=000858&d=2024'])
+    })
+
+    it('参数没有任何可用取值：说明 URL 里这个位置会是空的，不给带空洞的 URL', async () => {
+      setup({ '1035': [], '1036': ['2026'] })
+      const w = mount(UrlParamEditor, { props: { url, paramRefs: ['1035', '1036'], paramValues: {} }, global: { stubs } })
+      await flushPromises()
+      expect(w.get('[data-testid="url-param-preview-missing"]').text()).toContain('A股-股票ID（1035） 没有可用取值')
+      expect(w.findAll('.upe-preview-url')).toHaveLength(0)
+    })
+
+    it('绑了参数但 URL 里没有占位：明说不会代入 URL', async () => {
+      setup({ '1035': ['600519'] })
+      const w = mount(UrlParamEditor, { props: { url: 'https://example.com/list', paramRefs: ['1035'], paramValues: {} }, global: { stubs } })
+      await flushPromises()
+      expect(w.get('[data-testid="url-param-preview-notoken"]').text()).toContain('已绑定的参数不会代入 URL')
+    })
+  })
+
   // 2026-08-26 拍板放开生产写（config/configParamAdd|Del 进白名单）：绑定/解绑必须真写后端。
   // 此前解绑只改内存，刷新后配置里的绑定又被读回来，等于按钮没生效。
   describe('绑定/解绑接真实接口（有 configId 时）', () => {
