@@ -552,6 +552,12 @@ const displayUserPrompt = computed(() => form.desc.replace(
 const activePrompt = computed(() => promptTab.value === 'user' ? displayUserPrompt.value : form.systemPrompt)
 const selectedPromptId = computed(() => form.promptCustom || systemTouched.value ? 0
   : form.promptTemplateId ?? promptTemplate.value?.promptId ?? 0)
+/** 模板下拉里「未选模板」那一项的文案：没改过但也没有模板可用（读取失败 / 未配置）时是内置默认，不是「自定义」 */
+const promptCurrentLabel = computed(() => form.promptCustom || systemTouched.value || form.promptTemplateId
+  ? '当前提示词（自定义）'
+  : promptTemplate.value ? '当前提示词' : '内置默认提示词')
+/** 提示词回退到内置默认（模板读取失败或未配置）：能生成，但在检查清单里用提示图标标出 */
+const promptFallback = computed(() => promptTemplateLoaded.value && !promptTemplate.value && !form.promptTemplateId && !form.promptCustom)
 const promptSourceText = computed(() => {
   if (!promptTemplateLoaded.value) return '正在读取数据监控提示词模板…'
   if (form.promptTemplateId && !promptTemplate.value) return promptTemplateError.value
@@ -932,7 +938,7 @@ const generationChecks = computed(() => {
     { key: 'scope', ok: !tableError && invalid?.key !== 'overdue', text: tableError || (invalid?.key === 'overdue' ? invalid.message
       : `时间字段：${selectedTimeLabel.value}${timeColumnError.value && metadataTimeFields.value.length ? ' · 使用表元数据' : ''}`
         + (!form.timeColumn ? ' · 依赖时间列的检查项可能无法判定' : '')) },
-    { key: 'prompt', ok: !promptError, text: promptError || (form.promptCustom ? '生成时使用自定义用户提示词' : promptSourceText.value) },
+    { key: 'prompt', ok: !promptError, warn: !promptError && promptFallback.value, text: promptError || (form.promptCustom ? '生成时使用自定义用户提示词' : promptSourceText.value) },
     { key: 'mode', ok: !modeError, text: modeError || (agent ? '智能体和仓库配置已就绪' : '已选内置接口模型，无需先保存草稿') },
   ]
 })
@@ -1440,7 +1446,7 @@ defineExpose({
               <section id="mc-prompt" class="mc-pane" tabindex="-1" aria-label="提示词">
                 <PromptTemplatePicker
                   :items="promptTemplates" :model-value="selectedPromptId" :loading="!promptTemplateLoaded"
-                  :disabled="busy" test-id="mc-prompt-template" @select="selectPromptTemplate"
+                  :disabled="busy" test-id="mc-prompt-template" :current-label="promptCurrentLabel" @select="selectPromptTemplate"
                 />
                 <p class="mc-hint" data-testid="mc-prompt-facts">
                   {{ form.promptCustom ? '当前表单（使用自定义提示词）' : '表单已填入' }}：
@@ -1765,7 +1771,7 @@ defineExpose({
             </div>
             <ul class="mc-generation-checks" aria-label="生成前检查" data-testid="mc-generation-checks">
               <li v-for="check in generationChecks" :key="check.key">
-                <span aria-hidden="true" :class="check.ok ? 'mc-check-ok' : 'mc-hint-error'">{{ check.ok ? '✓' : '!' }}</span>
+                <span aria-hidden="true" :class="!check.ok ? 'mc-hint-error' : check.warn ? 'mc-check-warn' : 'mc-check-ok'" :data-testid="`mc-check-${check.key}`">{{ !check.ok ? '!' : check.warn ? 'i' : '✓' }}</span>
                 {{ check.text }}
                 <template v-if="!check.ok">
                   <button type="button" class="mc-mini" @click="focusGenerationCheck(check.key)">去查看</button>
@@ -2088,6 +2094,8 @@ defineExpose({
 .mc-generation-checks li { overflow-wrap: anywhere; }
 .mc-generation-checks button { margin-left: 6px; }
 .mc-check-ok { color: var(--rc-ok); }
+/* 能生成但走了兜底（如提示词模板读取失败用内置默认）：提示色，不用绿勾 */
+.mc-check-warn { color: var(--rc-warning, #b45309); font-weight: 700; }
 .mc-pane { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 12px; border: 1px solid #dce5f3; border-radius: 8px; background: var(--rc-surface); }
 .mc-pane-script { padding: 0; border: 0; }
 .mc-card { display: flex; flex-direction: column; padding: 2px 12px; border: 1px solid var(--rc-border); border-radius: 8px; background: var(--rc-surface); min-width: 0; }

@@ -1209,6 +1209,10 @@ describe('MonitorConfigEditor 提示词模板与监控 ID', () => {
 
     expect((wrapper.find('[data-testid="mc-system-prompt"]').element as HTMLTextAreaElement).value).toBe(defaultSystemPrompt())
     expect(wrapper.find('[data-testid="mc-prompt-source"]').text()).toContain('使用内置默认')
+    // 回退内置默认不是「自定义」：下拉写内置默认；检查清单用提示图标，不打绿勾、不阻断
+    expect(wrapper.getComponent({ name: 'PromptTemplatePicker' }).props('currentLabel')).toBe('内置默认提示词')
+    expect(wrapper.get('[data-testid="mc-check-prompt"]').text()).toBe('i')
+    expect(wrapper.get('[data-testid="mc-check-prompt"]').classes()).toContain('mc-check-warn')
   })
 
   it('已有记录：保留保存过的系统提示词，不被模板覆盖；「恢复模板」才换成模板', async () => {
