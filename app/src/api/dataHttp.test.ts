@@ -653,6 +653,18 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     expect(new URL(url, 'http://x').searchParams.get('more')).toBe('ENTRY_ID is null')
   })
 
+  // 1125：无筛选条件时后端导出只查必填列，非必填业务列（K1~K4）会只有表头没有值；
+  // 带上恒真占位 more 让后端切到 SELECT * 分支，才能把全部业务列带出来。
+  it('exportUrl：没有筛选条件时也带恒真 more（1 = 1），避免非必填业务列导出为空', async () => {
+    const { dataApi } = await import('./index')
+
+    const url = dataApi.exportUrl({ tableId: '6910011' })
+
+    const params = new URL(url, 'http://x').searchParams
+    expect(params.get('entryType')).toBe('6910011')
+    expect(params.get('more')).toBe('1 = 1')
+  })
+
   // 1016：导出接口不认 siteId / sourceIds，按网站导出把源范围折进 more
   it('exportUrl：源范围折成 SOURCE_ID in (...) 并进 more，与其它条件 AND', async () => {
     const { dataApi } = await import('./index')
@@ -664,9 +676,12 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     expect(params.has('sourceIds')).toBe(false)
   })
 
-  it('exportUrl：没有任何条件时不带 more', async () => {
+  // 1125 前的契约是「没有任何条件时不带 more」，但后端导出只查必填列，
+  // 导致非必填业务列只有表头没有值（数据中心「航运数据」实测）。改为恒真占位 more 强制走 SELECT *。
+  it('exportUrl：没有任何条件时带恒真 more，不能空着（否则非必填业务列导出为空）', async () => {
     const { dataApi } = await import('./index')
 
-    expect(dataApi.exportUrl({ tableId: '1042' })).not.toContain('more=')
+    const url = dataApi.exportUrl({ tableId: '1042' })
+    expect(new URL(url, 'http://x').searchParams.get('more')).toBe('1 = 1')
   })
 })
