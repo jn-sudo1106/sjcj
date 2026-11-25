@@ -4,18 +4,20 @@
 // 一次只展示一个上下文：
 //   - 传了 sourceId：源内视图——一张检查项表（每行带最近状态），运行记录点「记录」走右侧抽屉。
 //     源来自 props，本页不提供换源；源名/网站等信息页头已有，不再重复一条信息条（1123 沟通：两张表堆一起）。
-//   - 没传 sourceId：网站视图——切网站由上层负责，这里只按 siteId 列出本站源与监控摘要。
+//   - 没传 sourceId：网站视图——切网站由上层负责，这里只按 siteId 列出本站**已绑定监控**的源。
+//     未绑定监控检查项的源不出行（1125 沟通：一片「未配置检查」的行只是噪音）；
+//     视觉口径对齐监控中心「数据源监控」（页头 + 统计条 + 源行 + 展开检查项）。
 //
 // 判断（最差事实 / 覆盖 / 未配置）全部走 `utils/monitor/sourceSummary`，本页不自行拼状态；
 // 运行记录列表与详情统一用 fe-runs 的 RunsDrawer（右侧抽屉），页内不再平铺最近运行表。
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Refresh } from '@element-plus/icons-vue'
 import { siteApi, sourceApi, type Source } from '@/api'
 import { listMonitors, listMonitorsOfSource, setMonitorsEnabled } from '@/api/monitorCenter'
 import type { MonitorRecordView, MonitorSourceRow, MonitorRunView } from '@/api/types/monitorCenter'
 import { summarizeSource, summarizeSources } from '@/utils/monitor/sourceSummary'
-import SiteSummaryBar from './monitor-site/SiteSummaryBar.vue'
-import { COVERAGE_PLACEHOLDER, checkSummary, dataText, kindText, planText } from './monitor-site/monitorFacts'
+import { COVERAGE_PLACEHOLDER, SITE_SUMMARY_ITEMS, checkSummary, dataText, kindText, planText } from './monitor-site/monitorFacts'
 import SiteMonitorConfigView from './SiteMonitorConfigView.vue'
 import RunsDrawer from './monitor-runs/RunsDrawer.vue'
 
@@ -92,12 +94,23 @@ async function onSaved() {
 }
 
 // ---------- 网站视图 ----------
-interface SiteSourceRow {
-  row: MonitorSourceRow
+/** 一行 = 一个**已绑定监控**的源；未绑定的源不入行（1125）。 */
+interface SiteRow {
+  sourceId: string
+  sourceName: string
+  siteName: string
+  monitorEnabled: number
+  monitorTotal: number
+  coverage: MonitorSourceRow['coverage']
+  label: string
+  tone: string
+  lastCheckAt: string
   monitors: MonitorRecordView[]
 }
 const siteSources = ref<Source[]>([])
-const siteRows = ref<SiteSourceRow[]>([])
+const siteRows = ref<SiteRow[]>([])
+/** 本站源总数里没绑定监控、被隐藏的那部分，用来解释「为什么只看到这几个源」。 */
+const siteHiddenSources = ref(0)
 const siteLoading = ref(false)
 const siteError = ref('')
 const siteLoaded = ref(false)
@@ -105,6 +118,15 @@ const expanded = ref<string[]>([])
 let siteToken = 0
 
 const siteName = computed(() => siteSources.value.find((s) => s.siteName)?.siteName || '')
+
+const siteStats = computed(() => {
+  const rows = siteRows.value
+  return {
+    sources: rows.length,
+    monitors: rows.reduce((sum, row) => sum + row.monitorTotal, 0),
+    enabled: rows.reduce((sum, row) => sum + row.monitorEnabled, 0),
+  }
+})
 
 async function loadSiteMode() {
   const token = ++siteToken
@@ -116,6 +138,7 @@ async function loadSiteMode() {
     siteError.value = errorText(sourcesResult.reason, '网站源列表加载失败')
     siteSources.value = []
     siteRows.value = []
+    siteHiddenSources.value = 0
     siteLoading.value = false
     siteLoaded.value = true
     return
@@ -125,6 +148,7 @@ async function loadSiteMode() {
   if (monitorsResult.status === 'rejected') {
     siteError.value = errorText(monitorsResult.reason, '监控记录加载失败')
     siteRows.value = []
+    siteHiddenSources.value = 0
     siteLoading.value = false
     siteLoaded.value = true
     return
@@ -142,10 +166,23 @@ async function loadSiteMode() {
       siteName: item.siteName,
     })),
   )
-  siteRows.value = rows.map((row) => ({
-    row,
-    monitors: siteMonitors.filter((monitor) => String(monitor.sourceId) === String(row.sourceId)),
-  }))
+  const bound = rows
+    .map<SiteRow>((row) => ({
+      sourceId: String(row.sourceId),
+      sourceName: row.sourceName || '',
+      siteName: row.siteName || '',
+      monitorEnabled: row.monitorEnabled,
+      monitorTotal: row.monitorTotal,
+      coverage: row.coverage,
+      label: row.label,
+      tone: row.tone,
+      lastCheckAt: row.lastCheckAt || '',
+      monitors: siteMonitors.filter((monitor) => String(monitor.sourceId) === String(row.sourceId)),
+    }))
+    // 没有绑定任何监控检查项的源不展示：整行都是「未配置检查」，只会淹没真正有结论的源。
+    .filter((row) => row.monitors.length > 0)
+  siteRows.value = bound
+  siteHiddenSources.value = Math.max(0, sources.length - bound.length)
   siteLoading.value = false
   siteLoaded.value = true
 }
@@ -181,7 +218,7 @@ function openMonitorRuns(monitor: MonitorRecordView) {
   }
 }
 
-function openSourceRuns(row: MonitorSourceRow) {
+function openSourceRuns(row: SiteRow) {
   selectedRun.value = null
   drawer.value = { open: true, sourceId: row.sourceId, monitorId: '', title: row.sourceName || row.sourceId }
 }
@@ -228,17 +265,44 @@ watch(
       </template>
     </template>
 
-    <!-- 网站视图：只按 siteId 看本站源，不出现其他网站的源 -->
+    <!-- 网站视图：只按 siteId 看本站源，且只列已绑定监控的源 -->
     <template v-else>
-      <SiteSummaryBar :site-name="siteName" />
+      <header class="smv-scope">
+        <div class="smv-heading">
+          <h2>数据质量监控</h2>
+          <span class="smv-tag">本站</span>
+          <span v-if="siteName" class="smv-site">{{ siteName }}</span>
+        </div>
+        <p class="smv-scope-hint">
+          只展示本站已绑定监控检查项的源；未绑定监控的源不在此出现，需要时到「监控中心 → 数据源监控」新增。
+        </p>
+      </header>
+
+      <!-- 网站级汇总仍等 C07 聚合，这里保留口径但不铺成 7 张「—」卡片 -->
+      <div class="smv-stats" data-testid="site-monitor-site-summary">
+        <span v-for="item in SITE_SUMMARY_ITEMS" :key="item" class="smv-stat">
+          {{ item }} <b class="is-pending" :title="COVERAGE_PLACEHOLDER">{{ COVERAGE_PLACEHOLDER }}</b>
+        </span>
+        <span class="smv-stat-note">网站级汇总需服务端聚合，不按当前页数据推算</span>
+      </div>
+
+      <div class="smv-bar">
+        <span class="smv-count">
+          共 <b>{{ siteStats.sources }}</b> 个已绑定监控的源 · 检查项 <b>{{ siteStats.monitors }}</b>（启用 {{ siteStats.enabled }}）
+          <template v-if="siteHiddenSources"> · 另有 {{ siteHiddenSources }} 个源未绑定监控，已隐藏</template>
+        </span>
+        <el-button :icon="Refresh" circle size="small" title="重新查询本站监控" @click="loadSiteMode" />
+      </div>
+
       <p v-if="siteLoading && !siteLoaded" class="smv-state" data-testid="site-monitor-site-loading">加载网站监控…</p>
       <p v-else-if="siteError" class="smv-state smv-state-error" data-testid="site-monitor-site-error">
         {{ siteError }}
         <button type="button" class="smv-link" @click="loadSiteMode">重试</button>
       </p>
-      <p v-else-if="!siteRows.length" class="smv-state" data-testid="site-monitor-site-empty">
-        该网站还没有可监控的源。请先在源列表里完成源配置，再回到这里查看监控。
-      </p>
+      <div v-else-if="!siteRows.length" class="smv-empty" data-testid="site-monitor-site-empty">
+        <strong>本站还没有绑定监控检查项的源</strong>
+        <p>到「监控中心 → 数据源监控」给源新增检查项后，这里会按源展示检查覆盖、最差事实和最近一次检查时间。</p>
+      </div>
       <table v-else class="smv-table" data-testid="site-monitor-site-table">
         <colgroup>
           <col class="c-expand" />
@@ -252,80 +316,93 @@ watch(
           <tr>
             <th aria-label="展开" />
             <th>源</th>
-            <th>检查项</th>
+            <th>检查覆盖</th>
             <th>最差事实</th>
             <th>最近检查</th>
             <th>操作</th>
           </tr>
         </thead>
         <tbody>
-          <template v-for="item in siteRows" :key="item.row.sourceId">
+          <template v-for="item in siteRows" :key="item.sourceId">
             <tr
               data-testid="site-monitor-site-row"
-              :data-source-id="item.row.sourceId"
-              :class="{ 'is-expanded': expanded.includes(String(item.row.sourceId)) }"
+              :data-source-id="item.sourceId"
+              :class="{ 'is-expanded': expanded.includes(item.sourceId) }"
             >
               <td class="c-expand">
                 <button
                   type="button"
                   class="smv-expand"
-                  :aria-expanded="expanded.includes(String(item.row.sourceId))"
-                  :data-testid="`site-monitor-site-expand-${item.row.sourceId}`"
-                  @click="toggleExpand(String(item.row.sourceId))"
+                  :aria-expanded="expanded.includes(item.sourceId)"
+                  :data-testid="`site-monitor-site-expand-${item.sourceId}`"
+                  @click="toggleExpand(item.sourceId)"
                 >
-                  {{ expanded.includes(String(item.row.sourceId)) ? '▾' : '▸' }}
+                  {{ expanded.includes(item.sourceId) ? '▾' : '▸' }}
                 </button>
               </td>
-              <td class="c-source" :title="item.row.sourceName || item.row.sourceId">
-                <span class="smv-name">{{ item.row.sourceName || item.row.sourceId }}</span>
-                <span class="smv-sub">{{ item.row.sourceId }}</span>
+              <td class="c-source" :title="item.sourceName || item.sourceId">
+                <span class="smv-name">{{ item.sourceName || item.sourceId }}</span>
+                <span class="smv-sub">{{ item.sourceId }}</span>
               </td>
-              <td class="c-checks">{{ item.row.monitorEnabled }} 启用 ／ 共 {{ item.row.monitorTotal }} 项</td>
+              <td class="c-checks">
+                <span class="smv-cover">{{ item.monitorEnabled }} 启用 ／ 共 {{ item.monitorTotal }} 项</span>
+              </td>
               <td class="c-worst">
-                <span class="smv-worst" :class="`tone-${item.row.tone}`">{{ item.row.label }}</span>
+                <span class="rc-status" :class="item.tone === 'good' ? 'ok' : item.tone === 'bad' ? 'err' : item.tone === 'warn' ? 'warn' : 'muted'">
+                  {{ item.label }}
+                </span>
               </td>
-              <td class="c-last" :title="item.row.lastCheckAt || '尚未检查'">{{ item.row.lastCheckAt || '尚未检查' }}</td>
+              <td class="c-last" :title="item.lastCheckAt || '尚未检查'">{{ item.lastCheckAt || '尚未检查' }}</td>
               <td class="c-op">
-                <span v-if="!item.monitors.length" class="smv-muted">未配置检查</span>
-                <span v-else-if="item.row.coverage === null" class="smv-muted" :title="COVERAGE_PLACEHOLDER">覆盖 —</span>
                 <button
-                  v-if="item.monitors.length"
                   type="button"
                   class="smv-link"
                   data-testid="site-monitor-site-row-runs"
-                  @click="openSourceRuns(item.row)"
+                  @click="openSourceRuns(item)"
                 >
                   运行记录
                 </button>
               </td>
             </tr>
-            <tr v-if="expanded.includes(String(item.row.sourceId))" class="smv-detail-row">
+            <tr v-if="expanded.includes(item.sourceId)" class="smv-detail-row">
               <td colspan="6">
-                <table v-if="item.monitors.length" class="smv-subtable" data-testid="site-monitor-site-subtable">
-                  <thead>
-                    <tr>
-                      <th>检查项</th>
-                      <th>方式</th>
-                      <th>检查摘要</th>
-                      <th>启用</th>
-                      <th>最近数据结论</th>
-                      <th>计划</th>
-                      <th>最近检查</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="monitor in item.monitors" :key="monitor.id">
-                      <td>{{ monitor.name || '未命名检查项' }}</td>
-                      <td>{{ kindText(monitor) }}</td>
-                      <td>{{ checkSummary(monitor) }}</td>
-                      <td>{{ monitor.enabled ? '启用' : '停用' }}</td>
-                      <td>{{ dataText(monitor) }}</td>
-                      <td>{{ planText(monitor) }}</td>
-                      <td>{{ monitor.lastCheckAt || '尚未检查' }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-                <p v-else class="smv-muted smv-detail-empty">该源还没有监控检查项。</p>
+                <section class="smv-inner">
+                  <div class="smv-inner-head">
+                    <span class="smv-inner-title">{{ item.sourceName || item.sourceId }}</span>
+                    <span class="smv-sub">{{ item.monitorEnabled }} 启用 ／ 共 {{ item.monitorTotal }} 项检查</span>
+                    <span class="smv-inner-spacer"></span>
+                    <button type="button" class="smv-link" @click="openSourceRuns(item)">查看运行记录</button>
+                  </div>
+                  <table class="smv-subtable" data-testid="site-monitor-site-subtable">
+                    <thead>
+                      <tr>
+                        <th>检查项</th>
+                        <th>方式</th>
+                        <th>检查摘要</th>
+                        <th>启用</th>
+                        <th>最近数据结论</th>
+                        <th>计划</th>
+                        <th>最近检查</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="monitor in item.monitors" :key="monitor.id">
+                        <td>
+                          <span class="smv-check-name" :title="monitor.name || '未命名检查项'">{{ monitor.name || '未命名检查项' }}</span>
+                          <div class="smv-sub">#{{ monitor.id }}</div>
+                        </td>
+                        <td>{{ kindText(monitor) }}</td>
+                        <td>{{ checkSummary(monitor) }}</td>
+                        <td>
+                          <span class="rc-status" :class="monitor.enabled ? 'run' : 'muted'">{{ monitor.enabled ? '启用' : '停用' }}</span>
+                        </td>
+                        <td>{{ dataText(monitor) }}</td>
+                        <td>{{ planText(monitor) }}</td>
+                        <td>{{ monitor.lastCheckAt || '尚未检查' }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </section>
               </td>
             </tr>
           </template>
@@ -352,7 +429,7 @@ watch(
   min-height: 0;
   height: 100%;
   overflow: auto;
-  padding: 6px 12px 12px;
+  padding: 0 0 12px;
   box-sizing: border-box;
 }
 .smv-state {
@@ -365,21 +442,127 @@ watch(
 .smv-state-error {
   color: var(--rc-danger, #dc2626);
 }
+
+/* 页头：与监控中心「数据源监控」同款（标题 + 范围标签 + 一行说明） */
+.smv-scope {
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--rc-border-soft);
+}
+.smv-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.smv-heading h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--rc-text);
+}
+.smv-tag {
+  padding: 2px 6px;
+  background: var(--rc-bg);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--rc-muted);
+}
+.smv-site {
+  font-size: 11px;
+  color: var(--rc-muted);
+}
+.smv-scope-hint {
+  margin: 5px 0 0;
+  font-size: 11px;
+  color: var(--rc-muted);
+  line-height: 1.6;
+}
+
+/* 网站级汇总：一行小字，不铺 7 张占位卡片 */
+.smv-stats {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 0 14px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rc-border-soft);
+  font-size: 11px;
+  color: var(--rc-text-2, #475569);
+}
+.smv-stat b {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.smv-stat b.is-pending {
+  color: var(--rc-faint, #94a3b8);
+  font-weight: 400;
+}
+.smv-stat-note {
+  margin-left: auto;
+  color: var(--rc-faint, #94a3b8);
+  font-size: 11px;
+}
+
+/* 工具条：源数统计 + 刷新 */
+.smv-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 14px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rc-border-soft);
+}
+.smv-count {
+  font-size: 12px;
+  color: var(--rc-muted, #64748b);
+  font-variant-numeric: tabular-nums;
+}
+.smv-count b {
+  color: var(--rc-text, #1e293b);
+  font-weight: 600;
+}
+.smv-bar :deep(.el-button) {
+  margin-left: auto;
+}
+
+.smv-empty {
+  margin: 18px 14px;
+  padding: 26px 16px;
+  border: 1px dashed var(--rc-border, #d8dee9);
+  border-radius: var(--rc-radius-sm, 6px);
+  background: #fbfdff;
+  text-align: center;
+}
+.smv-empty strong {
+  display: block;
+  color: var(--rc-text-1, #1f2937);
+  font-size: 13px;
+  font-weight: 600;
+}
+.smv-empty p {
+  margin: 6px 0 0;
+  color: var(--rc-muted, #64748b);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 .smv-table {
-  width: 100%;
+  width: calc(100% - 28px);
+  margin: 0 14px;
   table-layout: fixed;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: 12px;
 }
 .smv-table .c-expand { width: 3%; }
-.smv-table .c-source { width: 24%; }
+.smv-table .c-source { width: 28%; }
 .smv-table .c-checks { width: 18%; }
-.smv-table .c-worst { width: 18%; }
-.smv-table .c-last { width: 20%; }
-.smv-table .c-op { width: 17%; }
+.smv-table .c-worst { width: 17%; }
+.smv-table .c-last { width: 19%; }
+.smv-table .c-op { width: 15%; }
 .smv-table th,
 .smv-table td {
-  padding: 6px 8px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--rc-border-soft, #eef1f5);
   text-align: left;
   vertical-align: middle;
@@ -387,45 +570,80 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.smv-table th {
-  color: var(--rc-text-3, #8a94a6);
-  font-size: 11px;
-  font-weight: 500;
-  background: var(--rc-bg-muted, #f7f9fc);
+.smv-table thead th {
+  color: var(--rc-text-2, #475569);
+  font-size: 11.5px;
+  font-weight: 700;
+  background: #f8fafc;
+}
+.smv-table tbody tr:hover {
+  background: #fbfdff;
+}
+.smv-table tbody tr.is-expanded {
+  background: #fbfdff;
 }
 .smv-name {
   color: var(--rc-text-1, #1f2937);
-  font-weight: 500;
+  font-weight: 600;
 }
 .smv-sub {
   margin-left: 6px;
   color: var(--rc-text-3, #8a94a6);
   font-size: 11px;
 }
-.smv-worst.tone-good { color: var(--rc-success, #16a34a); }
-.smv-worst.tone-bad { color: var(--rc-danger, #dc2626); }
-.smv-worst.tone-warn { color: var(--rc-warning, #d97706); }
-.smv-worst.tone-unknown { color: var(--rc-text-2, #5b667a); }
-.smv-worst.tone-muted { color: var(--rc-text-3, #8a94a6); }
-.smv-muted {
-  color: var(--rc-text-3, #8a94a6);
-  font-size: 11.5px;
+.smv-cover {
+  color: var(--rc-text-2, #475569);
+  font-variant-numeric: tabular-nums;
+}
+.smv-table .rc-status {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .smv-expand {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: 1px solid var(--rc-border, #d8dee9);
   border-radius: 4px;
   background: #fff;
   color: var(--rc-text-2, #5b667a);
   font-size: 11px;
-  line-height: 16px;
+  line-height: 18px;
   cursor: pointer;
 }
+.smv-expand:hover {
+  border-color: var(--rc-primary, #2563eb);
+  color: var(--rc-primary, #2563eb);
+}
+
+/* 展开区：卡在行下的白底小面板，和监控中心的行内表同构 */
 .smv-detail-row > td {
-  padding: 0 8px 8px;
-  background: var(--rc-bg-muted, #f7f9fc);
+  padding: 0 10px 10px;
+  background: #fbfdff;
+}
+.smv-inner {
+  background: #fff;
+  border: 1px solid #dbe6f6;
+  border-radius: var(--rc-radius-sm, 6px);
+  overflow: hidden;
+}
+.smv-inner-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rc-border-soft, #e2e8f0);
+  background: #fbfdff;
+}
+.smv-inner-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--rc-text, #1e293b);
+}
+.smv-inner-spacer {
+  flex: 1 1 auto;
 }
 .smv-subtable {
   width: 100%;
@@ -435,7 +653,7 @@ watch(
 }
 .smv-subtable th,
 .smv-subtable td {
-  padding: 5px 8px;
+  padding: 7px 10px;
   border-bottom: 1px solid var(--rc-border-soft, #eef1f5);
   text-align: left;
   white-space: nowrap;
@@ -443,13 +661,21 @@ watch(
   text-overflow: ellipsis;
 }
 .smv-subtable th {
-  color: var(--rc-text-3, #8a94a6);
-  font-size: 10.5px;
-  font-weight: 500;
+  color: var(--rc-text-2, #475569);
+  font-size: 11px;
+  font-weight: 700;
+  background: #f8fafc;
 }
-.smv-detail-empty {
-  margin: 0;
-  padding: 10px 8px;
+.smv-check-name {
+  color: var(--rc-text-1, #1f2937);
+  font-weight: 600;
+}
+.smv-subtable .smv-sub {
+  margin: 2px 0 0;
+}
+.smv-subtable .rc-status {
+  height: 20px;
+  font-size: 11px;
 }
 .smv-link {
   padding: 0;
@@ -457,6 +683,7 @@ watch(
   background: none;
   color: var(--rc-primary, #2563eb);
   font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
 }
 .smv-link:hover {
