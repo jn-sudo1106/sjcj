@@ -25,6 +25,7 @@ import {
 import { ArrowDown, ArrowUp, Coin, Filter, Warning } from '@element-plus/icons-vue'
 import { dataApi, type DataRow, type RowQuery } from '@/api'
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
+import CellOverflowText from '@/components/CellOverflowText.vue'
 import { readSqlConditions, rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import ColumnPickerDialog from '@/components/ColumnPickerDialog.vue'
 import { useColumnPicker } from '@/utils/table/useColumnPicker'
@@ -399,6 +400,9 @@ function cellKind(column: DataQueryColumn, value: unknown): 'link' | 'file' | 't
   if (isOssFilePath({ prop: column.hintProp ?? column.prop, desc: column.label }, v)) return 'file'
   return 'text'
 }
+function cellText(value: unknown): string {
+  return String(value ?? '—')
+}
 function onFileCell(column: DataQueryColumn, value: unknown) {
   emit('file-click', String(value), { prop: column.hintProp ?? column.prop, columnName: column.prop, desc: column.label })
 }
@@ -567,6 +571,7 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
           :label="col.label"
           :width="col.width"
           :sortable="col.sortable && allSort ? 'custom' : false"
+          :show-overflow-tooltip="false"
         >
           <template #default="{ row }">
             <slot name="cell" :row="row" :column="col">
@@ -582,7 +587,9 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
                   @click.stop="onFileCell(col, row.values?.[col.prop])"
                 >📄 {{ row.values?.[col.prop] }}</button>
               </template>
-              <span v-else>{{ row.values?.[col.prop] ?? '—' }}</span>
+              <!-- 业务列值经常很长（指标名称、业务转化…）：省略号 + 悬停看全文。
+                   不用列上的 show-overflow-tooltip：自定义 slot 渲染时它量不出溢出，悬停没提示。 -->
+              <CellOverflowText v-else :text="cellText(row.values?.[col.prop])" />
             </slot>
           </template>
         </el-table-column>
@@ -653,6 +660,9 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
 .dqp-range-sep { color: var(--rc-faint); }
 .dqp-table { flex: 1; min-height: 0; background: #fff; }
 .dqp-table :deep(.el-table .cell) { white-space: nowrap; }
+/* 表头要显示完整字段名：不再 nowrap 截断，放不下就折行（列宽仍按列配置）。
+   业务列名经常带后缀，比如「指标名称-K1」「更新频率-K3」，截成「指标名..」看不出是哪一列。 */
+.dqp-table :deep(.el-table__header-wrapper th.el-table__cell .cell) { white-space: normal; word-break: break-word; line-height: 1.35; }
 .dqp-table :deep(.el-table td.el-table__cell), .dqp-table :deep(.el-table th.el-table__cell) { padding: 8px 0; font-size: 12px; }
 .dqp-table :deep(.el-table td.el-table__cell) { color: #334155; }
 .dqp-table :deep(.el-table__body tr:hover > td) { background: #f8fbff; }

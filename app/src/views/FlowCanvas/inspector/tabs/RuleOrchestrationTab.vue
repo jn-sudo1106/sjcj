@@ -591,6 +591,16 @@ const scriptLabel = computed(() => (isRule.value ? 'Python 脚本' : '抓取配�
 const promptCategoryGroups = computed(() => promptCategoryGroupsForNode(cfg.value))
 const promptCategory = computed(() => resolvePromptCategoryForNode(cfg.value, orchCfg.value.promptCategory))
 const promptListCategory = computed(() => promptListCategoryForNode(cfg.value))
+// 提示词表里 node_type 一次是符号名（老行 rule_processing/data_monitoring）、一次是类型编号（新行 600/610），
+// 同名多行时按编号取，才不会命中 9 月那条老模板（2026-11-25 生产实测 prompt 1 vs 74）。
+const promptNodeTypeCode = computed(() => {
+  const code = String(cfg.value?.configType ?? '').trim()
+  if (code) return code
+  // 新建节点还没落库时 configType 为空，按节点语义兜底成提示词表里的类型编号
+  if (isMonitor.value) return '610'
+  if (isRule.value) return '600'
+  return ''
+})
 const describeTouched = ref(false)
 
 /**
@@ -1046,6 +1056,11 @@ watch(
 function onDescribeChange(e: Event) {
   describeTouched.value = true
   patch({ describe: (e.target as HTMLTextAreaElement).value })
+}
+/** 工作台左栏「规则处理描述」直接编辑（原为只读，导致弹窗里提示必填却填不进去，2026-11-25） */
+function onWorkbenchDescribeChange(text: string) {
+  describeTouched.value = true
+  patch({ describe: text })
 }
 /** 工作台左栏「保存」：置位手改旗标，之后的自动拼接不再覆盖 */
 function onPromptSaved() {
@@ -2468,6 +2483,7 @@ function onTestScript() {
     :config-id="cfg?.configId"
     :prompt-category="promptCategory"
     :prompt-list-category="promptListCategory"
+    :node-type-code="promptNodeTypeCode"
     :prompt-category-groups="promptCategoryGroups"
     :input-table-name="sourceTableName"
     :output-table-name="orchCfg.outputTable"
@@ -2501,6 +2517,7 @@ function onTestScript() {
     @update:model-provider-code="onModelProviderChange"
     @update:model-code="onModelChange"
     @update:script="onScriptChange"
+    @update:describe="onWorkbenchDescribeChange"
     @save-prompt-preview="onSavePromptPreview"
     @generate="onGenerateScript"
     @cancel-generate="onCancelGenerate"

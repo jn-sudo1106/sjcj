@@ -12,7 +12,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useWorkspaceStore } from '../../stores/workspace'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import type { UserInfo } from '@/api/auth'
-import { dataApi, sourceApi, entryApi, favoriteApi, logReportApi, type DataTableMeta, type DataRow, type EntryTypeGroup } from '../../api'
+import { configApi, dataApi, sourceApi, entryApi, favoriteApi, logReportApi, type DataTableMeta, type DataRow, type EntryTypeGroup } from '../../api'
 import { downloadCsv } from '@/utils/format/csvExport'
 
 // 当前页 CSV 导出会触发浏览器下载，jsdom 里换成桩，只断言传给它的文件名和内容
@@ -196,6 +196,9 @@ describe('数据中心 · 数据查询 tab', () => {
     const source = { sourceId: '391008025', name: '企业客户类型标签', configId: '81952', mainTable: 't2', url: '', owner: 'admin', state: 'C' }
     vi.mocked(sourceApi.sourcePaged).mockResolvedValue({ total: 1, list: [source] })
     vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(source)
+    // 导入弹窗会校验「配置的输出实体 == 当前表」，这里让 81952 归属 t1；本表无其它配置。
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '81952', name: '采集', enabled: true, entryTypeId: 't1' })
+    vi.spyOn(configApi, 'configPaged').mockResolvedValue({ total: 0, list: [] })
     const imported = vi.spyOn(dataApi, 'importData').mockResolvedValue({ success: true })
     await mountPage()
     await waitForLoad()

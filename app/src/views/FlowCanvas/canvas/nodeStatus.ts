@@ -26,12 +26,19 @@ function hasLoginConfig(cfg: NodeConfig): boolean {
   return configs.some((config) => config.enabled && (config.newLoginConfig === '0' ? config.authConfig.trim() : config.loginUrl.trim() && config.loginName.trim() && config.loginPwd.trim()))
 }
 
+/**
+ * 判定选项。`urlFromSource`：采集 URL 由源提供、此处不要求（2026-11-23）。
+ * 流程级只读预览（新建采集选模板、流程选择 / 替换 / 复制预览）没有源，URL 要到建源后才填进节点，
+ * 按通用口径算会让所有采集节点永远「待配置」，看着像模板没配好。只影响展示，保存 / 发起抓取前校验不走这里。
+ */
+export interface NodeStatusOptions { urlFromSource?: boolean }
+
 /** 「待配置」到底缺什么——只写状态不写原因，用户没法自查。 */
-function missingFor(cfg: NodeConfig): string[] {
+function missingFor(cfg: NodeConfig, opts: NodeStatusOptions = {}): string[] {
   const miss: string[] = []
   const collect = cfg.collectCfg
   if (collect) {
-    if (!collectUrlOf(cfg)) miss.push('URL')
+    if (!opts.urlFromSource && !collectUrlOf(cfg)) miss.push('URL')
     if (!hasLoginConfig(cfg)) miss.push('登录配置')
     if (collectorCapabilityOf(cfg)?.kind !== 'login' && !collect.outputTable) miss.push('输出表')
     return miss
@@ -69,9 +76,9 @@ function collectUrlOf(cfg: NodeConfig): string {
   return cfg.collectCfg?.url || cfg.configUrl || ''
 }
 
-export function nodeStatusOf(cfg: NodeConfig): { configured: boolean; left: string; missing: string[] } {
+export function nodeStatusOf(cfg: NodeConfig, opts: NodeStatusOptions = {}): { configured: boolean; left: string; missing: string[] } {
   const configured = cfg.collectCfg
-    ? !!(collectUrlOf(cfg) && hasLoginConfig(cfg) && (collectorCapabilityOf(cfg)?.kind === 'login' || cfg.collectCfg.outputTable))
+    ? !!((opts.urlFromSource || collectUrlOf(cfg)) && hasLoginConfig(cfg) && (collectorCapabilityOf(cfg)?.kind === 'login' || cfg.collectCfg.outputTable))
     : isRuleNode(cfg)
       ? !!(cfg.configId && cfg.ruleCfg?.script?.trim())
     // 与 tableChip 同口径：非采集节点的输出表可以继承上游，见 missingFor 的说明
@@ -90,5 +97,5 @@ export function nodeStatusOf(cfg: NodeConfig): { configured: boolean; left: stri
           ? (cfg.status && cfg.status !== '待配置' ? cfg.status : '运行')
           : '待配置'
         : '待配置'
-  return { configured, left, missing: left === '待配置' ? missingFor(cfg) : [] }
+  return { configured, left, missing: left === '待配置' ? missingFor(cfg, opts) : [] }
 }

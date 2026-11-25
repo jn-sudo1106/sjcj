@@ -6,7 +6,7 @@ import ElementPlus, { ElMessageBox } from 'element-plus'
 import PromptTemplatePicker from './PromptTemplatePicker.vue'
 import { fetchPromptList } from '@/api/prompt'
 import { nodePromptApi } from '@/api/nodePrompts'
-vi.mock('@/api/nodePrompts', () => ({ nodePromptApi: { selection: vi.fn(), select: vi.fn() } }))
+vi.mock('@/api/nodePrompts', () => ({ nodePromptApi: { selection: vi.fn(), select: vi.fn(), list: vi.fn() } }))
 vi.mock('@/api/prompt', () => ({ fetchPromptList: vi.fn() }))
 vi.mock('@/api', () => ({ fetchModelProviders: vi.fn().mockResolvedValue([]), fetchDefaultModels: vi.fn().mockResolvedValue([]) }))
 const choices = [
@@ -16,6 +16,7 @@ const choices = [
 beforeEach(() => {
   vi.stubEnv('VITE_FLOW_PROXY_TARGET', 'http://127.0.0.1:8090')
   vi.mocked(fetchPromptList).mockResolvedValue(choices)
+  vi.mocked(nodePromptApi.list).mockResolvedValue([])
   vi.mocked(nodePromptApi.selection).mockResolvedValue({ promptTemplateId: 2 })
   vi.mocked(nodePromptApi.select).mockImplementation(async (_id, promptTemplateId) => ({ promptTemplateId }))
 })
@@ -96,5 +97,54 @@ it('配置已明确选择自定义时，不会重新套用默认提示词', asyn
   const w = setup(false, 0); await w.setProps({ configId: '1401081', open: true }); await flushPromises()
   expect(w.getComponent(PromptTemplatePicker).props('modelValue')).toBe(0)
   expect(w.emitted('update:systemPrompt')).toBeUndefined()
+  w.unmount()
+})
+
+// 2026-11-25：左栏「规则处理描述」原为只读，但工作台里的「生成脚本」要求它非空，
+// 用户在弹窗里看到「请先填写规则处理描述」却无处可填。改成可编辑并回写父组件。
+it('规则处理描述可在工作台里直接编辑并回写', async () => {
+  const w = setup(false, 0)
+  await w.setProps({ isRule: true, hidePromptByDefault: true, describe: '', describeLabel: '规则处理描述', open: true })
+  await flushPromises()
+  const box = w.get('[data-testid="wb-describe"]')
+  expect((box.element as HTMLTextAreaElement).readOnly).toBe(false)
+  await box.setValue('把入参里的发布时间转成 yyyy-MM-dd，并丢掉三天前的记录')
+  expect(w.emitted('update:describe')?.at(-1)).toEqual(['把入参里的发布时间转成 yyyy-MM-dd，并丢掉三天前的记录'])
+  w.unmount()
+})
+
+// 2026-11-25 生产实测：规则处理在提示词表里有两行——prompt 1（node_type='rule_processing'，9 月）
+// 与 prompt 74（node_type='600'，11-23 用户在系统设置里维护的那条）。只取列表第一条会命中老模板。
+it('同名多模板时优先取与本节点类型编号一致的那条', async () => {
+  vi.mocked(nodePromptApi.selection).mockResolvedValue(null as never)
+  vi.mocked(fetchPromptList).mockResolvedValue([
+    { promptId: 1, promptName: '规则处理配置提示词 1', nodeType: 'rule_processing', nodeTypeName: '规则处理', category: 'rule', systemPrompt: '老模板 {{describe}}', isActive: 1, isDefault: 1 },
+    { promptId: 74, promptName: '规则处理-字段转换脚本', nodeType: '600', nodeTypeName: '规则处理', category: 'rule', systemPrompt: '新模板 {{describe}}', isActive: 1, isDefault: 1 },
+  ])
+  const w = setup(false, 0)
+  await w.setProps({ isRule: true, hidePromptByDefault: true, promptListCategory: 'rule', promptCategory: '规则处理', describeLabel: '规则处理描述', nodeTypeCode: '600', open: true })
+  await flushPromises()
+  expect(w.emitted('update:promptTemplateId')?.at(-1)).toEqual([74])
+  expect(w.emitted('update:systemPrompt')?.at(-1)).toEqual(['新模板 当前需求'])
+  w.unmount()
+})
+
+// 2026-11-25 生产实测：内置接口的「系统提示词」读的是 data-process 的旧列表接口，
+// 里面只有 prompt 69（node_type='910'），用户在「系统设置 → 节点类型 → 提示词模板（用途=脚本）」
+// 维护的 prompt 74 根本不在里面——所以改了模板页面上看不到变化。
+// 现在优先按节点类型编号读 template_use='script' 的模板，取不到才退回旧接口。
+it('内置接口的系统提示词取节点提示词接口里 script 用途的模板', async () => {
+  vi.mocked(nodePromptApi.selection).mockResolvedValue(null as never)
+  vi.mocked(nodePromptApi.list).mockResolvedValue([
+    { promptId: 1, promptName: '规则处理配置提示词 1', nodeType: 'rule_processing', nodeTypeName: '规则处理', category: 'rule', templateUse: 'config', systemPrompt: '九月的配置提示词', isActive: 1, isDefault: 1, revision: 'r1' },
+    { promptId: 74, promptName: '规则处理-字段转换脚本', nodeType: '600', nodeTypeName: '规则处理', category: 'rule', templateUse: 'script', systemPrompt: '字段转换脚本模板 {{describe}}', isActive: 1, isDefault: 1, revision: 'r74' },
+  ] as never)
+  const w = setup(false, 0)
+  await w.setProps({ isRule: true, hidePromptByDefault: true, promptListCategory: 'rule', promptCategory: '规则处理', nodeTypeCode: '600', open: true })
+  await flushPromises()
+  expect(nodePromptApi.list).toHaveBeenCalledWith({ sourceType: '600', templateUse: 'script' })
+  expect(fetchPromptList).not.toHaveBeenCalled()
+  expect(w.getComponent(PromptTemplatePicker).props('modelValue')).toBe(74)
+  expect(w.emitted('update:systemPrompt')?.at(-1)).toEqual(['字段转换脚本模板 当前需求'])
   w.unmount()
 })

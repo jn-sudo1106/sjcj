@@ -97,7 +97,7 @@ watch(() => props.flow, async (flow) => {
         <div class="frp-canvas" v-loading="previewLoading">
           <p v-if="previewError" class="frp-state frp-error">{{ previewError }}</p>
           <p v-else-if="previewEmpty" class="frp-state">这个流程还没有节点</p>
-          <FlowReadonlyCanvas v-else-if="previewDef" :def="previewDef" :selected="previewNodeId" @select="previewNodeId = $event" />
+          <FlowReadonlyCanvas v-else-if="previewDef" :def="previewDef" :selected="previewNodeId" url-from-source @select="previewNodeId = $event" />
         </div>
         </template>
         <template #right>

@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
+import ElementPlus from 'element-plus'
 import type { MonitorRecordView } from '@/api/types/monitorCenter'
 import { siteApi, sourceApi, type Source } from '@/api'
 import { listMonitors, listMonitorsOfSource, setMonitorsEnabled } from '@/api/monitorCenter'
@@ -94,14 +95,14 @@ const stubs = {
 function mountSource(sourceId = 'src-1') {
   return mount(SiteMonitorView, {
     props: { siteId: 'site-4', sourceId },
-    global: { stubs },
+    global: { stubs, plugins: [ElementPlus] },
   })
 }
 
 function mountSite() {
   return mount(SiteMonitorView, {
     props: { siteId: 'site-4' },
-    global: { stubs },
+    global: { stubs, plugins: [ElementPlus] },
   })
 }
 
@@ -238,12 +239,12 @@ describe('SiteMonitorView · 网站视图（只按 siteId）', () => {
     expect(drawer.attributes('data-monitor-id')).toBe('')
   })
 
-  it('7 项摘要全部显示「—（需服务端聚合）」并说明原因，不用 0 冒充', async () => {
+  it('网站级 7 项汇总仍是占位「—（需服务端聚合）」，不铺卡片也不用 0 冒充', async () => {
     const wrapper = mountSite()
     await flushPromises()
 
     const summary = wrapper.get('[data-testid="site-monitor-site-summary"]')
-    expect(summary.findAll('dt').map((node) => node.text())).toEqual([
+    expect(summary.findAll('.smv-stat').map((node) => node.text().replace(/\s+/g, ' ').replace(/ —（需服务端聚合）$/, ''))).toEqual([
       '有启用检查源',
       '当日应检查源',
       '至少完成一次',
@@ -252,9 +253,8 @@ describe('SiteMonitorView · 网站视图（只按 siteId）', () => {
       '执行失败源',
       '漏跑源',
     ])
-    expect(summary.findAll('dd')).toHaveLength(7)
-    expect(summary.findAll('dd').every((node) => node.text() === '—（需服务端聚合）')).toBe(true)
-    expect(summary.text()).toContain('需服务端按授权聚合')
+    expect(summary.findAll('.smv-stat b').every((node) => node.text() === '—（需服务端聚合）')).toBe(true)
+    expect(summary.text()).toContain('需服务端聚合')
     expect(summary.text()).not.toMatch(/\b0\b/)
     expect(wrapper.find('[data-testid="site-monitor-facts"]').exists()).toBe(false)
   })
@@ -275,20 +275,33 @@ describe('SiteMonitorView · 网站视图（只按 siteId）', () => {
     expect(wrapper.html()).not.toContain('别站源')
   })
 
-  it('源行展示检查项数量、最差事实、最近检查；未配置源也出现', async () => {
+  it('源行展示检查项数量、最差事实、最近检查；未绑定监控的源不展示', async () => {
     listMonitorsMock.mockResolvedValue([
       monitor({ id: 'm-a', sourceId: 'src-a', lastCheckAt: '2026-11-11 09:00:00' }),
     ])
     const wrapper = mountSite()
     await flushPromises()
 
+    // 本站有 src-a / src-b 两个源，只有 src-a 绑定了检查项 → 只出一行，并说明隐藏了几个源
     const rows = wrapper.findAll('[data-testid="site-monitor-site-row"]')
+    expect(rows).toHaveLength(1)
     expect(rows[0]!.text()).toContain('源 A')
     expect(rows[0]!.text()).toContain('1 启用 ／ 共 1 项')
     expect(rows[0]!.text()).toContain('数据正常')
     expect(rows[0]!.text()).toContain('2026-11-11 09:00:00')
-    expect(rows[1]!.text()).toContain('源 B')
-    expect(rows[1]!.text()).toContain('未配置检查')
+    expect(wrapper.text()).toContain('另有 1 个源未绑定监控，已隐藏')
+    expect(wrapper.text()).not.toContain('未配置检查')
+  })
+
+  it('一个源都没绑定监控时给空状态，而不是一片「未配置检查」', async () => {
+    listMonitorsMock.mockResolvedValue([])
+    const wrapper = mountSite()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="site-monitor-site-row"]').exists()).toBe(false)
+    const empty = wrapper.get('[data-testid="site-monitor-site-empty"]')
+    expect(empty.text()).toContain('本站还没有绑定监控检查项的源')
+    expect(empty.text()).toContain('监控中心')
   })
 
   it('展开源行只展示该源的检查项，不跨源', async () => {

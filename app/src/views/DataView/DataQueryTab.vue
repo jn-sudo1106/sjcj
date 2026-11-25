@@ -706,7 +706,7 @@ function openImport() {
     return
   }
   if (!importSourceId.value) {
-    ElMessage.error('请先选择源，或先查询包含源 ID 的数据')
+    ElMessage.error('请先选择源（新表还没有源时，可在源下拉里直接搜索源 ID 或名称）')
     return
   }
   importOpen.value = true

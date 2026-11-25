@@ -2696,7 +2696,8 @@ async function importEntryData(input: EntryDataImportInput): Promise<EntryDataIm
   form.append('file', input.file)
   form.append('entryTypeId', input.tableId)
   form.append('sourceId', input.sourceId)
-  form.append('configId', input.configId)
+  // 后端 uploadData 的 configId 可选：为空时跳过「配置输出实体 == 目标表」校验，按不关联配置导入。
+  if (input.configId) form.append('configId', input.configId)
   const headers: Record<string, string> = {}
   const token = readStoredToken()
   if (token) headers[ACCESS_TOKEN_HEADER] = token
@@ -2910,12 +2911,18 @@ export const dataApi = {
   // 按当前查询条件导出。旧平台 EntryList2.vue handleExport 也带 more；此前这里漏了它，
   // 页面筛了 SQL / 时间 / 数据 ID / 父 ID，导出的仍是整表（或整源）——见 buildExportMore。
   // nextFlag 原样透传：后端导出是否认它未验证（旧平台导出没带）。
+  //
+  // 1125：没有筛选条件时也必须带 more（恒真占位 `1 = 1`）。后端导出取列只取必填字段
+  // （TbEntryController#entryExportAll 用 getRequiredCols），而表头按全部业务字段生成，
+  // 非必填的业务列（如 K1~K4）因此只有表头没有值；反过来 more 非空时后端会切到
+  // `SELECT *` 分支（TbEntryService#loadAllEntry），业务列才带得出来。
+  // `1 = 1` 是 ReadOnlySql#isTrivialTrueFragment 显式放行的占位片段，不改变筛选语义。
   exportUrl: (q: RowQuery): string => {
     const built = buildLegacyRowQuery(q)
     return appendQuery(BASE_URL + 'entry/entryExportAll', {
       entryType: built.entryType, sourceId: built.sourceId, state: built.state,
       min: q.min, max: q.max, nextFlag: q.nextFlag,
-      more: buildExportMore(q),
+      more: buildExportMore(q) ?? '1 = 1',
     })
   },
 }
