@@ -25,6 +25,7 @@ import {
 import { ArrowDown, ArrowUp, Coin, Filter, Warning } from '@element-plus/icons-vue'
 import { dataApi, type DataRow, type RowQuery } from '@/api'
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
+import CellOverflowText from '@/components/CellOverflowText.vue'
 import { readSqlConditions, rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import ColumnPickerDialog from '@/components/ColumnPickerDialog.vue'
 import { useColumnPicker } from '@/utils/table/useColumnPicker'
@@ -399,6 +400,9 @@ function cellKind(column: DataQueryColumn, value: unknown): 'link' | 'file' | 't
   if (isOssFilePath({ prop: column.hintProp ?? column.prop, desc: column.label }, v)) return 'file'
   return 'text'
 }
+function cellText(value: unknown): string {
+  return String(value ?? '—')
+}
 function onFileCell(column: DataQueryColumn, value: unknown) {
   emit('file-click', String(value), { prop: column.hintProp ?? column.prop, columnName: column.prop, desc: column.label })
 }
@@ -567,6 +571,7 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
           :label="col.label"
           :width="col.width"
           :sortable="col.sortable && allSort ? 'custom' : false"
+          :show-overflow-tooltip="false"
         >
           <template #default="{ row }">
             <slot name="cell" :row="row" :column="col">
@@ -582,7 +587,9 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
                   @click.stop="onFileCell(col, row.values?.[col.prop])"
                 >📄 {{ row.values?.[col.prop] }}</button>
               </template>
-              <span v-else>{{ row.values?.[col.prop] ?? '—' }}</span>
+              <!-- 业务列值经常很长（指标名称、业务转化…）：省略号 + 悬停看全文。
+                   不用列上的 show-overflow-tooltip：自定义 slot 渲染时它量不出溢出，悬停没提示。 -->
+              <CellOverflowText v-else :text="cellText(row.values?.[col.prop])" />
             </slot>
           </template>
         </el-table-column>
