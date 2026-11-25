@@ -174,13 +174,34 @@ function pickDefaultPrompt(choices: PromptTemplateItem[]): PromptTemplateItem | 
   }
   return choices[0]
 }
+/**
+ * 提示词模板来源：与「系统设置 → 节点类型 → 提示词模板」是同一份数据（cfg_llm_node_prompt）。
+ * 代码生成用的是 template_use='script' 的模板（90 网页抓取 / 600 规则处理 / 610 数据监控…），
+ * 老的 template_use='config' 行（node_type 是 rule_processing 这类符号名）是 9 月的「配置提示词」，
+ * 取它会绕过用户 11 月在系统设置里维护的新模板 —— 2026-11-25「内置接口的没改」就是这个原因。
+ * 本机的旧列表接口（data-process /api/prompt/list）只有一份老数据，所以这里优先走节点提示词接口，
+ * 接口不可用（老环境没有 flow/node-prompts）时再退回它，行为与改动前一致。
+ */
+async function loadPromptChoices(): Promise<PromptTemplateItem[]> {
+  const code = (props.nodeTypeCode ?? '').trim()
+  if (code) {
+    for (const templateUse of ['script', 'config'] as const) {
+      try {
+        const rows = await nodePromptApi.list({ sourceType: code, templateUse })
+        const active = (rows ?? []).filter(item => item.isActive !== 0)
+        if (active.length) return active
+      } catch { /* 没有节点提示词接口的环境：走下面的旧列表接口 */ }
+    }
+  }
+  return fetchPromptList(props.promptListCategory, promptCategoryDraft.value)
+}
 async function loadPromptTemplate(apply = true, restoreSelection = false) {
   const seq = ++promptRequestSeq
   promptLoading.value = true
   promptError.value = ''
   try {
     const [choices, selection] = await Promise.all([
-      fetchPromptList(props.promptListCategory, promptCategoryDraft.value),
+      loadPromptChoices(),
       restoreSelection && persistedConfigId.value && !props.promptTemplateId ? nodePromptApi.selection(persistedConfigId.value).catch(() => null) : Promise.resolve(null),
     ])
     if (seq !== promptRequestSeq) return
