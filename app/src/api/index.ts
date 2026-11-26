@@ -2518,6 +2518,28 @@ function isSingleId(raw?: string) {
   return !!raw && /^\s*\d+\s*$/.test(raw)
 }
 
+/**
+ * 取数 API「按条件分页查询」(`/rest/api/v1/data/qs`) 的 more（2026-11-26）。
+ *
+ * 186 实测（type=2102205 / sourceId=491000039）：qs 认 `more`（无条件 5962 → `K11=1` 5581 → `K11=999` 0），
+ * 分页用 `page`/`size`；`state` 作为独立参数**被忽略**，只能写进 more；末尾分号报「非法注入风险」。
+ * ID 分批接口 `/data/entry` 不认任何条件参数（more/sql/where/cond 都试过），所以条件只能走 qs。
+ * 口径与页面查询一致：数据 ID / 父 ID 折成 in、状态折成 STATE in、SQL 与时间范围同 buildLegacyMore。
+ */
+export function buildQueryServiceMore(q: Pick<RowQuery, 'dataId' | 'parentId' | 'state' | 'sql' | 'startTime' | 'endTime' | 'min' | 'max'>): string | undefined {
+  const states = (q.state ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  const numeric = (v: unknown) => (v !== undefined && v !== null && /^\d+$/.test(String(v).trim()) ? String(v).trim() : undefined)
+  const min = numeric(q.min)
+  const max = numeric(q.max)
+  return joinMore([
+    idInClause('ENTRY_ID', q.dataId),
+    idInClause('PARENT_ID', q.parentId),
+    states.length ? `STATE in (${states.map((s) => `'${escapeLegacySqlString(s)}'`).join(',')})` : undefined,
+    min ? `ENTRY_ID >= ${min}` : undefined,
+    max ? `ENTRY_ID <= ${max}` : undefined,
+  ], buildLegacyMore(q as RowQuery))
+}
+
 /** ID 片段与 SQL / 时间范围合成 more；后者可能含 OR，有 ID 片段时加括号隔开 */
 function joinMore(idParts: Array<string | undefined>, more?: string) {
   const parts = idParts.filter((part): part is string => !!part)

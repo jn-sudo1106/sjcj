@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Connection, CopyDocument } from '@element-plus/icons-vue'
 import { copyToClipboard } from '@/utils/clipboard'
 
@@ -24,17 +25,58 @@ const props = withDefaults(defineProps<{
   returns: DataFetchApiReturn[]
   tableLabel?: string
   sourceLabel?: string
+  /** 按当前查询条件分页取数的地址（/rest/api/v1/data/qs）；有条件时才传，空串 = 不显示 */
+  conditionUrl?: string
+  /** 带进 conditionUrl 的条件原文，仅用于展示 */
+  condition?: string
   testId?: string
 }>(), {
   tableLabel: '',
   sourceLabel: '',
+  conditionUrl: '',
+  condition: '',
   testId: 'data-api-dialog',
 })
 
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
 
+/**
+ * 条件模式（2026-11-26）：有查询条件时，弹窗只讲「按当前条件分页查询」(/data/qs) 这一个接口——
+ * 参数表、返回字段都按 qs 的口径；ID 分批取数（不认条件）收成一行备用地址。
+ * 第一版两个接口的参数混在一张表里，返回字段又只写了 entry 的 lastId，读的人分不清哪个参数属于哪个地址。
+ */
+const conditionMode = computed(() => !!props.conditionUrl)
+
+/** qs 的参数：凭据 / 表 / 源沿用调用方给的说明，分页与条件按 186 实测口径 */
+const shownParams = computed<DataFetchApiParam[]>(() => {
+  if (!conditionMode.value) return props.params
+  const keep = props.params.filter((p) => ['appId', 'appKey', 'type', 'sourceId'].includes(p.name))
+  return [
+    ...keep,
+    { name: 'more', type: '字符串', required: '非', limit: 'SQL 条件', description: '查询条件（WHERE 后面的部分），已按当前页面条件填好；需 URL 编码，不要带末尾分号' },
+    { name: 'page', type: '整型', required: '是', limit: '从 1 开始', description: '页码；翻页时 page + 1，直到 page 超过 data.pageMax' },
+    { name: 'size', type: '整型', required: '是', limit: '建议 ≤ 200', description: '每页条数' },
+  ]
+})
+
+const shownReturns = computed<DataFetchApiReturn[]>(() => {
+  if (!conditionMode.value) return props.returns
+  return [
+    { code: 'data.total', name: '命中总数', type: '整型', description: '符合条件的数据总条数（与页面查询的行数一致）' },
+    { code: 'data.pageMax', name: '总页数', type: '整型', description: '按当前 size 计算的总页数' },
+    { code: 'data.pageNum', name: '当前页码', type: '整型', description: '即请求的 page' },
+    { code: 'data.pageSize', name: '每页条数', type: '整型', description: '即请求的 size' },
+    ...props.returns.filter((r) => r.code.startsWith('data.list[]')),
+  ]
+})
+
+const primaryUrl = computed(() => props.conditionUrl || props.url)
+
 async function copyUrl() {
   await copyToClipboard(props.url, 'API 地址')
+}
+async function copyPrimary() {
+  await copyToClipboard(primaryUrl.value, 'API 地址')
 }
 </script>
 
@@ -59,11 +101,11 @@ async function copyUrl() {
     </template>
 
     <div class="dap-content" :data-testid="testId">
-      <section class="dap-endpoint">
+      <section class="dap-endpoint" :data-testid="conditionMode ? 'data-api-condition' : undefined">
         <div class="dap-endpoint-head">
           <div class="dap-endpoint-name">
             <span class="dap-method">GET</span>
-            <span>ID 分批取数</span>
+            <span>{{ conditionMode ? '按当前条件分页查询' : 'ID 分批取数' }}</span>
           </div>
           <div class="dap-scope">
             <span v-if="tableLabel" class="dap-chip" :title="tableLabel">表：{{ tableLabel }}</span>
@@ -71,15 +113,25 @@ async function copyUrl() {
           </div>
         </div>
         <div class="dap-url-row">
-          <code class="dap-url">{{ url }}</code>
-          <button class="dap-copy" type="button" title="复制 API 地址" @click="copyUrl">
+          <code class="dap-url" :data-testid="conditionMode ? 'data-api-condition-url' : 'data-api-url'">{{ primaryUrl }}</code>
+          <button class="dap-copy" type="button" title="复制 API 地址" @click="copyPrimary">
             <el-icon><CopyDocument /></el-icon><span>复制地址</span>
           </button>
         </div>
-        <div class="dap-tip">
+        <div v-if="conditionMode" class="dap-tip">
+          已带上当前查询条件 <code :title="condition">{{ condition }}</code>，取到的数据与页面表格一致。
+          从 <code>page=1</code> 开始，每次 <code>page + 1</code>，取到 <code>data.pageMax</code> 页为止。
+        </div>
+        <div v-else class="dap-tip">
           每次响应会返回 <code>data.lastId</code>；读取下一批时，将 <code>startId</code> 设置为 <code>lastId + 1</code>。
         </div>
       </section>
+
+      <div v-if="conditionMode" class="dap-alt" data-testid="data-api-id-alt">
+        <span>不需要条件、要取整个源的数据？可用 ID 分批取数（不支持查询条件）：</span>
+        <code class="dap-alt-url" :title="url">{{ url }}</code>
+        <button class="dap-alt-copy" type="button" @click="copyUrl">复制</button>
+      </div>
 
       <section class="dap-section">
         <div class="dap-section-head">
@@ -87,9 +139,9 @@ async function copyUrl() {
             <h3>请求参数</h3>
             <p>应用凭据由部署环境提供，地址中的值可直接用于当前环境。</p>
           </div>
-          <span class="dap-count">{{ params.length }} 项</span>
+          <span class="dap-count">{{ shownParams.length }} 项</span>
         </div>
-        <el-table :data="params" class="dap-table" size="small" stripe>
+        <el-table :data="shownParams" class="dap-table" size="small" stripe>
           <el-table-column prop="name" label="参数" width="125">
             <template #default="{ row }"><code class="dap-field">{{ row.name }}</code></template>
           </el-table-column>
@@ -106,9 +158,9 @@ async function copyUrl() {
             <h3>返回字段</h3>
             <p>除通用字段外，还会返回当前数据表的业务字段。</p>
           </div>
-          <span class="dap-count">{{ returns.length }} 项</span>
+          <span class="dap-count">{{ shownReturns.length }} 项</span>
         </div>
-        <el-table :data="returns" class="dap-table dap-return-table" size="small" stripe max-height="310">
+        <el-table :data="shownReturns" class="dap-table dap-return-table" size="small" stripe max-height="310">
           <el-table-column prop="code" label="字段" width="210">
             <template #default="{ row }"><code class="dap-field">{{ row.code }}</code></template>
           </el-table-column>
@@ -122,7 +174,7 @@ async function copyUrl() {
     <template #footer>
       <div class="dap-footer">
         <button class="dap-btn" type="button" @click="emit('update:modelValue', false)">关闭</button>
-        <button class="dap-btn primary" type="button" @click="copyUrl"><el-icon><CopyDocument /></el-icon>复制 API 地址</button>
+        <button class="dap-btn primary" type="button" @click="copyPrimary"><el-icon><CopyDocument /></el-icon>{{ conditionMode ? '复制带条件的地址' : '复制 API 地址' }}</button>
       </div>
     </template>
   </el-dialog>
@@ -148,7 +200,12 @@ async function copyUrl() {
 .dap-btn.primary { border-color: var(--rc-primary, #2563eb); background: var(--rc-primary, #2563eb); color: #fff; }
 .dap-btn.primary:hover { border-color: #1d4ed8; background: #1d4ed8; }
 .dap-tip { margin-top: 9px; color: var(--rc-muted, #64748b); font-size: 11px; line-height: 1.55; }
-.dap-tip code { color: var(--rc-text-2, #334155); font-family: var(--rc-mono, monospace); }
+.dap-tip code { overflow-wrap: anywhere; color: var(--rc-text-2, #334155); font-family: var(--rc-mono, monospace); }
+.dap-alt { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: -6px; padding: 8px 12px; border: 1px dashed var(--rc-border-soft, #e2e8f0); border-radius: 8px; color: var(--rc-muted, #64748b); font-size: 11px; }
+.dap-alt > span { flex: none; }
+.dap-alt-url { flex: 1; min-width: 0; overflow: hidden; color: var(--rc-text-2, #334155); font: 11px/1.5 var(--rc-mono, monospace); text-overflow: ellipsis; white-space: nowrap; }
+.dap-alt-copy { flex: none; padding: 0; border: 0; background: none; color: var(--rc-primary, #2563eb); font-size: 11px; cursor: pointer; }
+.dap-alt-copy:hover { text-decoration: underline; }
 .dap-section { min-width: 0; }
 .dap-section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
 .dap-section-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
@@ -172,6 +229,8 @@ async function copyUrl() {
   .dap-endpoint-head { align-items: flex-start; flex-direction: column; }
   .dap-scope { justify-content: flex-start; flex-wrap: wrap; }
   .dap-url-row { flex-direction: column; }
+  .dap-alt { flex-wrap: wrap; }
+  .dap-alt > span { flex: 1 1 100%; }
   .dap-copy { min-height: 34px; }
   .dap-section-title { align-items: flex-start; flex-direction: column; gap: 2px; }
 }

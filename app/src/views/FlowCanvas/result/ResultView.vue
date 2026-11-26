@@ -8,7 +8,7 @@ import { ArrowDown, ArrowUp, Search } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery, type Step } from '@/api'
+import { buildQueryServiceMore, dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery, type Step } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
   isFirstRunnableNode, hasDirectSuccessor, directPredecessorIds, directSuccessorIds, directSuccessorIdsIncludingDisabled, type NodeConfig,
@@ -48,6 +48,7 @@ import { copyToClipboard } from '@/utils/clipboard'
 import { downloadCsv } from '@/utils/format/csvExport'
 import { resultRowsCsv } from './exportRows'
 import DataFetchApiDialog from '@/components/data/DataFetchApiDialog.vue'
+import { buildQueryServiceUrl } from '@/utils/data/legacyFetchApi'
 
 function copyText(val: string, label?: string) {
   void copyToClipboard(val, label)
@@ -1425,6 +1426,7 @@ async function loadData() {
       page: page.value,
       size: size.value,
     }
+    appliedApiMore.value = buildQueryServiceMore(query) ?? ''
     let [metaRes, dataRes] = await Promise.allSettled([
       dataApi.tableMeta(selectedTable.value),
       dataApi.rowQueryPaged(query),
@@ -1625,7 +1627,10 @@ const apiIdFetchUrl = computed(() => {
   params.push('startId=0', 'size=10')
   return `${restBase.endsWith('/') ? restBase.slice(0, -1) : restBase}/api/v1/data/entry?${params.join('&')}`
 })
-const apiParams = [
+/** 上一次实际执行的查询折成的 more：取数 API 要和表格是同一批数据，不跟着未提交的输入走 */
+const appliedApiMore = ref('')
+const apiConditionUrl = computed(() => buildQueryServiceUrl({ tableId: selectedTable.value, sourceId: sourceId.value, more: appliedApiMore.value }))
+const apiParams = computed(() => [
   { name: 'appId', type: '字符串', required: '是', limit: '-', description: '取数应用 ID，由部署环境提供' },
   { name: 'appKey', type: '字符串', required: '是', limit: '-', description: '取数应用密钥，由部署环境提供' },
   { name: 'type', type: '整型', required: '是', limit: '-', description: '实体类型 ID，对应当前数据表' },
@@ -1634,7 +1639,7 @@ const apiParams = [
   { name: 'startId', type: '长整型', required: '必填', limit: '最小为0', description: '取数起始 ID，下一批使用上次返回的 lastId+1' },
   { name: 'endId', type: '长整型', required: '非', limit: '-', description: '限制取数最大 ID' },
   { name: 'dataRange', type: '字符串', required: '非', limit: '时间范围', description: '时间上下限格式为“开始 - 结束”' },
-]
+])
 const apiReturns = computed(() => [
   { code: 'data.lastId', name: '本次最大 ID', type: '长整型', description: '下一批 startId 使用 lastId+1' },
   { code: 'data.size', name: '本次返回数量', type: '整型', description: 'list 实际返回条数' },
@@ -2515,6 +2520,8 @@ async function onTestScript() {
       :url="apiIdFetchUrl"
       :params="apiParams"
       :returns="apiReturns"
+      :condition-url="apiConditionUrl"
+      :condition="appliedApiMore"
       :table-label="meta?.tableName || selectedTable"
       :source-label="source?.name ? `${source.name}（${sourceId}）` : sourceId"
       test-id="source-data-api-dialog"

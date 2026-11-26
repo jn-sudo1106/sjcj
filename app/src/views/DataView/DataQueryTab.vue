@@ -6,7 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, QuestionFilled, Plus, Refresh, DArrowRight, Tickets, Star, StarFilled } from '@element-plus/icons-vue'
 import {
-  dataApi, sourceApi, entryApi, logReportApi,
+  buildQueryServiceMore, dataApi, sourceApi, entryApi, logReportApi,
   type DataRow, type DataTableMeta, type EntryTypeGroup, type EntryDetail, type RowQuery, type SourceOption,
   type EntryType, type Source,
 } from '../../api'
@@ -40,6 +40,7 @@ import { unsupportedNextStepBatchFilters } from './batchGuards'
 import { extFromFieldHint, extFromName, ossPathWithExt } from '@/utils/ossFile'
 import FilePreview from '@/views/FlowCanvas/result/components/FilePreview.vue'
 import DataFetchApiDialog from '@/components/data/DataFetchApiDialog.vue'
+import { buildQueryServiceUrl } from '@/utils/data/legacyFetchApi'
 import { currentBackendHost } from '@/api/client'
 import { SYNC_PLATFORM_BACKEND_HOSTS } from '@/constants/backend'
 import { dataStateInfo } from '@/constants/runState'
@@ -651,7 +652,10 @@ const apiIdFetchUrl = computed(() => {
   return `${restBase.replace(/\/$/, '')}/api/v1/data/entry?${params.join('&')}`
 })
 
-const apiParams = [
+// 2026-11-26：ID 分批接口不认查询条件，有条件时另给一条 /data/qs 地址把 more 带上（口径同页面查询）
+const apiConditionMore = computed(() => buildQueryServiceMore(panelFilter.value) ?? '')
+const apiConditionUrl = computed(() => buildQueryServiceUrl({ tableId: tableId.value, sourceId: sourceId.value, more: apiConditionMore.value }))
+const apiParams = computed(() => [
   { name: 'appId', type: '字符串', required: '是', limit: '-', description: '取数应用 ID，由部署环境提供' },
   { name: 'appKey', type: '字符串', required: '是', limit: '-', description: '取数应用密钥，由部署环境提供' },
   { name: 'type', type: '整型', required: '是', limit: '-', description: '实体类型 ID，对应数据表' },
@@ -659,7 +663,7 @@ const apiParams = [
   { name: 'size', type: '整型', required: '是', limit: '1-200', description: '每次获取数量' },
   { name: 'startId', type: '长整型', required: '必填', limit: '最小为0', description: '取数据的起始ID，如从头取，设成0' },
   { name: 'endId', type: '长整型', required: '非', limit: '-', description: '限制取数据的最大ID，与startId配合用来取一段数据' },
-]
+])
 
 const apiReturns = computed(() => [
   { code: 'data.lastId', name: '本次获取数据中最大ID', type: '长整型', description: '获取下一批数据时，startId 设为 lastId+1' },
@@ -1409,6 +1413,8 @@ onUnmounted(() => {
       :url="apiIdFetchUrl"
       :params="apiParams"
       :returns="apiReturns"
+      :condition-url="apiConditionUrl"
+      :condition="apiConditionMore"
       :table-label="tableMeta?.tableName || tableId"
       :source-label="apiSourceLabel"
     />
