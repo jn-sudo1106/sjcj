@@ -16,7 +16,7 @@ function tileStyle() {
 }
 import { visibleIssueTags } from '@/utils/sourceMark'
 import { FolderOpened, Star, StarFilled } from '@element-plus/icons-vue'
-import { loadDirPath } from '@/api/sourceDirs'
+import { bizMembership, isBizDir, loadDirPath } from '@/api/sourceDirs'
 import { isFavoriteSite, toggleFavoriteSite } from '@/utils/siteFavorites'
 import { recordSiteVisit } from '@/utils/siteRecents'
 import { trackClick } from '@/utils/logEvents'
@@ -171,18 +171,105 @@ watch(() => props.sites, (list) => { void ensureCards(list) })
  * 用 dirId 经 loadDirPath 补齐完整路径（同目录 / 父级有缓存）；补齐前和补齐失败都先显示叶子名。
  */
 const dirPaths = reactive<Record<string, string[]>>({})
-function ensureDirPaths(list: Site[]) {
-  for (const id of new Set(list.map(site => site.dirId).filter((id): id is string => !!id && id !== '0'))) {
-    if (dirPaths[id]) continue
-    loadDirPath(id).then(path => { if (path.length) dirPaths[id] = path }).catch(() => { /* 保持叶子名 */ })
+/** 目录是否在业务目录树下：路径补齐后才知道；补齐失败按「非业务目录」算（点了也打不开） */
+const dirIsBiz = reactive<Record<string, boolean>>({})
+const hasDir = (id: string | undefined): id is string => !!id && id !== '0'
+const dirPathTasks = new Map<string, Promise<void>>()
+function ensureDirPath(id: string): Promise<void> {
+  let task = dirPathTasks.get(id)
+  if (!task) {
+    task = loadDirPath(id)
+      .then(path => { if (path.length) dirPaths[id] = path; dirIsBiz[id] = isBizDir(id) })
+      .catch(() => { dirIsBiz[id] = false; dirPathTasks.delete(id) })
+    dirPathTasks.set(id, task)
   }
+  return task
+}
+function ensureDirPaths(list: Site[]) {
+  for (const id of new Set(list.map(site => site.dirId).filter(hasDir))) ensureDirPath(id)
 }
 watch(() => props.sites, ensureDirPaths, { immediate: true })
+
+/**
+ * 网站没分类时按所属源推导（2026-11-26 用户：「网站有分类找网站，没有的应该找所属源」）。
+ * 186 上 2436 个网站里 2383 个 categoryId 为空（10-27 / 11-02 批量导入没带），但源大多已在业务目录里。
+ * 源 → 业务目录没有反查接口，复用源列表「业务目录」列那份 bizMembership（整树枚举、后台优先级、会话缓存）；
+ * 网站的源取已加载的完整列表，否则按站取前 DERIVE_SAMPLE 个。多个目录按源数从多到少，标签显示最多的那个。
+ */
+const DERIVE_SAMPLE = 200
+const derivedDirs = reactive<Record<string, string[]>>({})
+const deriving = reactive<Record<string, boolean>>({})
+async function siteSourceIds(site: Site): Promise<string[]> {
+  const cached = childrenCache[site.siteId]
+  if (cached && childrenComplete[site.siteId] && !props.sourceScope) return cached.map(s => s.sourceId)
+  const result = await sourceApi.sourcePaged({ siteIds: site.siteId, page: 1, size: DERIVE_SAMPLE, field: 'SOURCE_ID', sorted: -1, type: 'DESC' })
+  return result.list.map(s => s.sourceId)
+}
+let deriveVersion = 0
+async function deriveSiteDirs(list: Site[]) {
+  const version = ++deriveVersion
+  // 已按业务目录筛选时卡片本身就在那个目录下，不为推导再起整树枚举（生产上要几十秒）
+  if (props.sourceScope?.query.directory?.kind === 'biz' && props.sourceScope.query.directory.mode !== 'none') return
+  const candidates = list.filter(site => site.sourceCount > 0 && !derivedDirs[site.siteId])
+  candidates.forEach(site => { if (hasDir(site.dirId)) deriving[site.siteId] = true })
+  // 网站自己的 categoryId 要先确认在业务目录树下；指向系统目录的（批量导入时挂在「广发」下）也按源推导
+  await Promise.all(candidates.map(site => (hasDir(site.dirId) ? ensureDirPath(site.dirId) : undefined)))
+  const targets = candidates.filter(site => !ownBizDir(site))
+  candidates.forEach(site => { if (!targets.includes(site)) delete deriving[site.siteId] })
+  if (version !== deriveVersion || !targets.length) return
+  targets.forEach(site => { deriving[site.siteId] = true })
+  try {
+    let membership: Map<string, string[]>
+    try { membership = await bizMembership() } catch { return }
+    // 逐站串行：每站一个 sourcePaged，不和首屏预览、数据量汇总抢连接
+    for (const site of targets) {
+      if (version !== deriveVersion) return
+      try {
+        const counts = new Map<string, number>()
+        for (const sourceId of await siteSourceIds(site)) {
+          for (const dirId of membership.get(sourceId) ?? []) counts.set(dirId, (counts.get(dirId) ?? 0) + 1)
+        }
+        const dirs = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id)
+        derivedDirs[site.siteId] = dirs
+        if (dirs[0]) ensureDirPath(dirs[0])
+      } catch { /* 单站失败保持「未分类」，换页 / 刷新再试 */ }
+      delete deriving[site.siteId]
+    }
+  } finally {
+    targets.forEach(site => { delete deriving[site.siteId] })
+  }
+}
+watch(() => props.sites, list => { void deriveSiteDirs(list) }, { immediate: true })
+
+/** 网站自己的 categoryId 确认在业务目录树下（路径还没补齐时不算） */
+const ownBizDir = (site: Site) => hasDir(site.dirId) && dirIsBiz[site.dirId] === true
+/** 网站的 categoryId 还在确认是不是业务目录 */
+const ownDirPending = (site: Site) => hasDir(site.dirId) && dirIsBiz[site.dirId] === undefined
+/** 卡片标签用的目录：网站自己的业务目录优先，没有（或只挂了系统目录）才用源推导出的第一个 */
+function effectiveDirId(site: Site): string | undefined {
+  if (ownBizDir(site)) return site.dirId
+  return derivedDirs[site.siteId]?.[0]
+}
+const isDerived = (site: Site) => !ownBizDir(site) && !!derivedDirs[site.siteId]?.[0]
 function dirSegments(site: Site): string[] {
-  const loaded = site.dirId ? dirPaths[site.dirId] : undefined
+  const id = effectiveDirId(site)
+  const loaded = id ? dirPaths[id] : undefined
   if (loaded?.length) return loaded
+  if (isDerived(site)) return id ? [`#${id}`] : []
+  // 确认之前先显示后端给的叶子名；确认是系统目录、源也推不出时显示「未分类」
+  if (!ownDirPending(site) && !ownBizDir(site)) return []
   const raw = site.categoryPath || site.category || ''
   return raw.split('/').map(part => part.trim()).filter(Boolean)
+}
+function dirTitle(site: Site): string {
+  const lines = [`业务目录：${dirSegments(site).join(' / ')}`]
+  if (isDerived(site)) {
+    const more = (derivedDirs[site.siteId]?.length ?? 0) - 1
+    const why = hasDir(site.dirId) ? '网站只挂了系统目录' : '网站未设分类'
+    lines.push(`${why}，按所属源的业务目录显示${more > 0 ? `（源还分布在另外 ${more} 个目录）` : ''}`)
+  }
+  if (effectiveDirId(site)) lines.push('点击打开源详情，左侧按这个目录列源')
+  return lines.join('\n')
 }
 /** 卡片上的目录文字：超过两级只留最后两级，前面用「…」，完整路径放 title */
 function dirLabel(site: Site): string {
@@ -191,7 +278,8 @@ function dirLabel(site: Site): string {
 }
 /** 点目录标签（1123 A4，与源列表「业务目录」列同口径）：父级打开这个网站在该目录下的源详情，左侧按目录列源 */
 function openDir(site: Site) {
-  if (site.dirId && site.dirId !== '0') emit('open-dir', site, { id: site.dirId, path: dirSegments(site).join(' / ') })
+  const id = effectiveDirId(site)
+  if (id) emit('open-dir', site, { id, path: dirSegments(site).join(' / ') })
 }
 
 // 页签网站化（0710 会议 B3）：入口只推路由，页签注册统一收口在画布加载（index.vue）
@@ -359,13 +447,18 @@ onUnmounted(() => {
           <button
             v-if="dirSegments(site).length"
             class="scg-cat"
-            :class="{ static: !site.dirId || site.dirId === '0' }"
+            :class="{ static: !effectiveDirId(site), derived: isDerived(site) }"
             type="button"
             data-testid="site-card-dir"
-            :title="`业务目录：${dirSegments(site).join(' / ')}${site.dirId && site.dirId !== '0' ? '\n点击打开源详情，左侧按这个目录列源' : ''}`"
+            :title="dirTitle(site)"
             @click.stop="openDir(site)"
           ><el-icon :size="12"><FolderOpened /></el-icon><span class="scg-cat-text">{{ dirLabel(site) }}</span></button>
-          <span v-else class="scg-cat none" data-testid="site-card-dir-none" title="这个网站还没有归入业务目录">未分类</span>
+          <span
+            v-else
+            class="scg-cat none"
+            data-testid="site-card-dir-none"
+            :title="deriving[site.siteId] ? '网站没有业务目录，正在按所属源查找…' : '这个网站和它的源都还没有归入业务目录'"
+          >未分类</span>
         </div>
       </div>
 
@@ -571,6 +664,8 @@ onUnmounted(() => {
 .scg-cat:hover { border-color: #ddd6fe; background: #ede9fe; }
 .scg-cat.static { cursor: default; }
 .scg-cat.static:hover { border-color: #ede9fe; background: #f5f3ff; }
+/* 按所属源推导的目录：虚线边区分「网站自己设的分类」 */
+.scg-cat.derived { border-style: dashed; }
 .scg-cat.none { border: 1px dashed var(--rc-border); background: transparent; color: var(--rc-faint); cursor: default; }
 .scg-cat .el-icon { flex: none; }
 .scg-cat-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

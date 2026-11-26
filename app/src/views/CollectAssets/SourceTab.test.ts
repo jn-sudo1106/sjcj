@@ -1052,7 +1052,8 @@ describe('SourceTab 聚合网站与目录接入', () => {
   it('业务目录含子孙直传，不等待 expandDirIds 或 listSources 成员枚举', async () => {
     const aggregate=vi.mocked(siteApi.sourceScopePaged).mockResolvedValue(response())
     const expand=vi.spyOn(sourceDirs,'expandDirIds');const members=vi.spyOn(sourceDirs,'bizScopeSourceIds');const membership=vi.spyOn(sourceDirs,'bizMembership')
-    const { wrapper }=await mountAt();aggregate.mockClear()
+    // 首屏未分类网站卡片会按所属源推导目录（11-26），这里只管「选了业务目录之后」不枚举
+    const { wrapper }=await mountAt();aggregate.mockClear();membership.mockClear()
     const directory=selectDirectory(wrapper);await flushPromises()
     expect(aggregate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ directory }),expect.any(AbortSignal))
     expect(aggregate.mock.calls[0]![0].sourceFilter.sourceIds).toBeUndefined()

@@ -522,6 +522,7 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
       <el-table
         :data="rows"
         :default-sort="defaultTableSort"
+        :height="workspaceLayout ? '100%' : undefined"
         style="width: 100%"
         show-overflow-tooltip
         empty-text="没有查询到符合条件的记录"
@@ -573,6 +574,10 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
           :sortable="col.sortable && allSort ? 'custom' : false"
           :show-overflow-tooltip="false"
         >
+          <!-- 表头也按单行省略 + 悬停看全文：列名带 -K1/-K3 后缀，截断后分不清是哪一列 -->
+          <template #header>
+            <CellOverflowText :text="col.label" />
+          </template>
           <template #default="{ row }">
             <slot name="cell" :row="row" :column="col">
               <template v-if="cellKind(col, row.values?.[col.prop]) === 'link'">
@@ -660,9 +665,10 @@ function onRowClick(row: DataRow, _column: unknown, event: Event) {
 .dqp-range-sep { color: var(--rc-faint); }
 .dqp-table { flex: 1; min-height: 0; background: #fff; }
 .dqp-table :deep(.el-table .cell) { white-space: nowrap; }
-/* 表头要显示完整字段名：不再 nowrap 截断，放不下就折行（列宽仍按列配置）。
-   业务列名经常带后缀，比如「指标名称-K1」「更新频率-K3」，截成「指标名..」看不出是哪一列。 */
-.dqp-table :deep(.el-table__header-wrapper th.el-table__cell .cell) { white-space: normal; word-break: break-word; line-height: 1.35; }
+/* 表头可排序时 EP 会在文字后面插一个排序箭头：用 flex 让列名占满剩余宽度、箭头留在右侧，
+   否则块级的省略号容器会把箭头挤到第二行。 */
+.dqp-table :deep(.el-table__header-wrapper th .cell:has(> .cell-overflow-text)) { display: flex; align-items: center; }
+.dqp-table :deep(.el-table__header-wrapper th .cell > .cell-overflow-text) { flex: 1 1 auto; min-width: 0; }
 .dqp-table :deep(.el-table td.el-table__cell), .dqp-table :deep(.el-table th.el-table__cell) { padding: 8px 0; font-size: 12px; }
 .dqp-table :deep(.el-table td.el-table__cell) { color: #334155; }
 .dqp-table :deep(.el-table__body tr:hover > td) { background: #f8fbff; }
