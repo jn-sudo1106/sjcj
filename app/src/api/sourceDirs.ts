@@ -65,6 +65,19 @@ export function dirNode(id: string): DirNode | undefined {
   return nodeIndex.get(id)
 }
 
+/**
+ * 已加载节点里这个目录是不是挂在业务目录（-2）下面。先 loadDirPath 把祖先补齐再调。
+ * 网站的 categoryId 有的指向系统目录（186 上「奥维云网AVC」→ 广发 / 家电 / …），按业务目录去查会被后端拒绝。
+ */
+export function isBizDir(id: string): boolean {
+  const seen = new Set<string>()
+  for (let cur = nodeIndex.get(id); cur && !seen.has(cur.id); cur = cur.parentId ? nodeIndex.get(cur.parentId) : undefined) {
+    if (cur.id === BIZ_DIR_ROOT_ID || cur.parentId === BIZ_DIR_ROOT_ID) return true
+    seen.add(cur.id)
+  }
+  return false
+}
+
 /** 从根到这个目录的名字链（只用已加载过的节点拼） */
 export function dirPath(id: string): string[] {
   const names: string[] = []

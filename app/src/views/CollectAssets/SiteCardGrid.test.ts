@@ -238,7 +238,11 @@ describe('SiteCardGrid 卡片操作菜单', () => {
 // 1123 A4：卡片目录不明显 → 带图标的完整路径标签，可点击按系统目录筛；无目录显示「未分类」
 describe('SiteCardGrid 目录标签', () => {
   afterEach(() => vi.restoreAllMocks())
-  const preview = () => vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([])
+  const preview = () => {
+    vi.spyOn(sourceDirs, 'isBizDir').mockReturnValue(true)
+    vi.spyOn(sourceDirs, 'bizMembership').mockResolvedValue(new Map())
+    return vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([])
+  }
 
   it('有 dirId 时补齐完整路径，点击抛出目录 ID；无查询时底部只显示总数', async () => {
     preview()
@@ -259,8 +263,9 @@ describe('SiteCardGrid 目录标签', () => {
     wrapper.unmount()
   })
 
-  it('路径补齐失败保留叶子名；超过两级只显示最后两级', async () => {
+  it('路径补齐失败按非业务目录处理（点了打不开），超过两级只显示最后两级', async () => {
     preview()
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
     vi.spyOn(sourceDirs, 'loadDirPath').mockImplementation(async id => {
       if (id === 'bad') throw new Error('目录不存在')
       return ['行业数据', '化工', '基础化工']
@@ -270,17 +275,67 @@ describe('SiteCardGrid 目录标签', () => {
       { ...site, siteId: 'b', category: '基础化工', dirId: 'deep' },
     ])
     const tags = wrapper.findAll('[data-testid="site-card-dir"]')
-    expect(tags[0].text()).toBe('基本资料')
-    expect(tags[1].text()).toBe('… / 化工 / 基础化工')
-    expect(tags[1].attributes('title')).toContain('行业数据 / 化工 / 基础化工')
+    expect(tags).toHaveLength(1)
+    expect(tags[0].text()).toBe('… / 化工 / 基础化工')
+    expect(tags[0].attributes('title')).toContain('行业数据 / 化工 / 基础化工')
+    expect(wrapper.get('[data-testid="site-card-dir-none"]').text()).toBe('未分类')
     wrapper.unmount()
   })
 
-  it('没有目录的网站显示「未分类」，不可点', async () => {
+  it('网站 categoryId 指向系统目录时按所属源的业务目录显示，点击只抛业务目录', async () => {
     preview()
+    vi.mocked(sourceDirs.isBizDir).mockImplementation(id => id !== '9008995')
+    vi.mocked(sourceDirs.bizMembership).mockResolvedValue(new Map([['s1', ['902']]]))
+    // 小站（源数 ≤ 预览上限）预览就是完整源列表，直接拿来推导，不再单独查源
+    vi.mocked(siteApi.siteSourcePreview).mockResolvedValue([source('s1', 0)])
+    const paged = vi.spyOn(sourceApi, 'sourcePaged')
+    vi.spyOn(sourceDirs, 'loadDirPath').mockImplementation(async id => (id === '902' ? ['产业数据', '家电'] : ['广发', '家电', '奥维云网2-家电快报']))
+    const { wrapper } = await mountGrid([{ ...site, dirId: '9008995' }])
+    const tag = wrapper.get('[data-testid="site-card-dir"]')
+    expect(tag.text()).toBe('产业数据 / 家电')
+    expect(tag.attributes('title')).toContain('网站只挂了系统目录，按所属源的业务目录显示')
+    await tag.trigger('click')
+    expect(wrapper.emitted('open-dir')?.[0]?.[1]).toEqual({ id: '902', path: '产业数据 / 家电' })
+    expect(paged).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('网站和所属源都没有目录时显示「未分类」，不可点', async () => {
+    preview()
+    vi.mocked(sourceDirs.bizMembership).mockResolvedValue(new Map([['other', ['900']]]))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: [source('s1', 0), source('s2', 0)] })
     const { wrapper } = await mountGrid([{ ...site, category: '', categoryPath: undefined, dirId: undefined }])
     expect(wrapper.find('[data-testid="site-card-dir"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="site-card-dir-none"]').text()).toBe('未分类')
+    wrapper.unmount()
+  })
+
+  it('网站没有分类时按所属源的业务目录显示，取源最多的目录，点击抛出该目录', async () => {
+    preview()
+    const membership = vi.mocked(sourceDirs.bizMembership).mockResolvedValue(new Map([
+      ['s1', ['901']], ['s2', ['902']], ['s3', ['902']],
+    ]))
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 3, list: [source('s1', 0), source('s2', 0), source('s3', 0)] })
+    vi.spyOn(sourceDirs, 'loadDirPath').mockImplementation(async id => (id === '902' ? ['产业数据', '交通运输'] : ['其他']))
+    const { wrapper } = await mountGrid([{ ...site, sourceCount: 30, category: '', categoryPath: undefined, dirId: undefined }])
+    expect(membership).toHaveBeenCalled()
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ siteIds: 'site-1', page: 1, size: 200 }))
+    const tag = wrapper.get('[data-testid="site-card-dir"]')
+    expect(tag.text()).toBe('产业数据 / 交通运输')
+    expect(tag.classes()).toContain('derived')
+    expect(tag.attributes('title')).toContain('按所属源的业务目录显示（源还分布在另外 1 个目录）')
+    await tag.trigger('click')
+    expect(wrapper.emitted('open-dir')?.[0]?.[1]).toEqual({ id: '902', path: '产业数据 / 交通运输' })
+    wrapper.unmount()
+  })
+
+  it('网站自己有分类时不按源推导', async () => {
+    preview()
+    const membership = vi.mocked(sourceDirs.bizMembership)
+    vi.spyOn(sourceDirs, 'loadDirPath').mockResolvedValue(['股票数据', '基本资料'])
+    const { wrapper } = await mountGrid([{ ...site, dirId: '9011495' }])
+    expect(membership).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="site-card-dir"]').classes()).not.toContain('derived')
     wrapper.unmount()
   })
 })
