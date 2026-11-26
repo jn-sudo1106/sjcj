@@ -7,6 +7,7 @@ defineProps<{
   task: TaskInst | null
   sourceName?: string
   stepName?: string
+  nodeTypeName?: string
 }>()
 
 const emit = defineEmits<{
@@ -28,6 +29,7 @@ const emit = defineEmits<{
       :task="task"
       :source-name="sourceName"
       :step-name="stepName"
+      :node-type-name="nodeTypeName"
       @close="emit('update:modelValue', false)"
       @locate-data="emit('locateData', $event)"
       @open-source="emit('openSource', $event)"

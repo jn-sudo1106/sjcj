@@ -4,9 +4,10 @@ import { computed, onActivated, onDeactivated, onUnmounted, reactive, ref, watch
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { dataApi, siteApi, sourceApi, flowCenterApi, workflowBindingApi, type NodeRunStat, type Source, type Step, type TaskInst } from '@/api'
+import { dataApi, siteApi, sourceApi, configApi, flowCenterApi, workflowBindingApi, type NodeRunStat, type Source, type Step, type TaskInst } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useAuthStore } from '@/stores/auth'
+import { useDictStore } from '@/stores/dict'
 import { confirmDanger } from '@/utils/confirmDanger'
 import { toExternalHref } from '@/utils/url/externalUrl'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
@@ -337,6 +338,7 @@ const autoRefresh = ref(false)
 
 // 重发 = task/resetTaskInsts（danger:true）。写入口对非 admin 隐藏，与 TaskInstDialog 同口径。
 const auth = useAuthStore()
+const dict = useDictStore()
 const canWrite = computed(() => auth.role === 'admin')
 const router = useRouter()
 const route = useRoute()
@@ -345,6 +347,23 @@ const detailTask = ref<TaskInst | null>(null)
 const detailVisible = ref(false)
 const extraTaskSteps = ref<Record<string, Step[]>>({})
 const taskMetadataRequests = new Map<string, Promise<void>>()
+const sourceMetadataRequests = new Map<string, Promise<void>>()
+const flowStepRequests = new Map<string, Promise<Step[]>>()
+const configTypes = ref<Record<string, string>>({})
+const configTypeRequests = new Map<string, Promise<void>>()
+let taskMetadataActive = true
+onActivated(() => { taskMetadataActive = true; if (rows.value.length) void loadPageTaskMetadata(rows.value, taskRequest) })
+onDeactivated(() => { taskMetadataActive = false })
+onUnmounted(() => { taskMetadataActive = false })
+
+function readTaskFlowSteps(id: string): Promise<Step[]> {
+  if (!flowStepRequests.has(id)) {
+    flowStepRequests.set(id, flowCenterApi.steps(id, { withConfigDetails: false }).catch(error => {
+      flowStepRequests.delete(id); throw error
+    }))
+  }
+  return flowStepRequests.get(id)!
+}
 
 function taskSteps(task: TaskInst): Step[] {
   return [...new Map([...(stepsBySource.value[task.sourceId] ?? []), ...(extraTaskSteps.value[task.sourceId] ?? [])]
@@ -369,7 +388,7 @@ async function ensureTaskMetadata(task: TaskInst) {
       const flowIds = task.flowId && task.flowId !== '0' ? [task.flowId]
         : (await workflowBindingApi.list(task.sourceId, { withNames: false })).map(binding => binding.workflowId)
       const results = await Promise.allSettled([...new Set(flowIds)].filter(id => id && id !== '0')
-        .map(id => flowCenterApi.steps(id, { withConfigDetails: false })))
+        .map(readTaskFlowSteps))
       extraTaskSteps.value = { ...extraTaskSteps.value, [task.sourceId]: [
         ...(extraTaskSteps.value[task.sourceId] ?? []),
         ...results.flatMap(result => result.status === 'fulfilled' ? result.value : []),
@@ -383,9 +402,10 @@ async function ensureTaskMetadata(task: TaskInst) {
 
 async function ensureSourceMetadata(targetSourceId: string) {
   if (!targetSourceId || stepsBySource.value[targetSourceId]) return
-  try {
+  if (!sourceMetadataRequests.has(targetSourceId)) sourceMetadataRequests.set(targetSourceId, (async () => {
+   try {
     const [steps, nodeRuns] = await Promise.all([
-      sourceApi.sourceSteps(targetSourceId),
+      sourceApi.sourceSteps(targetSourceId, { withConfigDetails: false }),
       sourceApi.sourceNodeRuns(targetSourceId).catch(() => []),
     ])
     stepsBySource.value = {
@@ -396,16 +416,55 @@ async function ensureSourceMetadata(targetSourceId: string) {
       ...nodeRunsBySource.value,
       [targetSourceId]: nodeRuns,
     }
-  } catch {
+   } catch {
+    sourceMetadataRequests.delete(targetSourceId)
     // 失败时不把执行节点标识误显示为流程节点。
-  }
+   }
+  })())
+  await sourceMetadataRequests.get(targetSourceId)
+}
+
+function nodeTypeCode(task: TaskInst): string {
+  const step = matchedTaskStep(task)
+  return [step?.configType, step?.stepType, configTypes.value[task.configId || '']]
+    .map(value => value == null ? '' : String(value).trim()).find(value => value && value !== '0') || ''
+}
+function nodeTypeName(task: TaskInst): string {
+  const code = nodeTypeCode(task)
+  if (!code || code === '0') return '未记录'
+  const label = dict.snatchTypes.find(value => value.match(/^\[([^\]]+)\]/)?.[1] === code)
+  return label ? label.replace(/^\[[^\]]+\]\s*(?:-\s*)?/, '') : `类型 ${code}`
+}
+async function ensureTaskType(task: TaskInst) {
+  const id = task.configId || ''
+  if (nodeTypeCode(task) || !/^[1-9]\d*$/.test(id)) return
+  if (!configTypeRequests.has(id)) configTypeRequests.set(id, configApi.configDetailRaw(id).then(raw => {
+    const code = raw?.configType == null ? '' : String(raw.configType).trim()
+    if (code && code !== '0') configTypes.value = { ...configTypes.value, [id]: code }
+    else configTypeRequests.delete(id)
+  }).catch(() => { configTypeRequests.delete(id) }))
+  await configTypeRequests.get(id)
+}
+async function loadPageTaskMetadata(items: TaskInst[], requestId: number) {
+  const targets = [...new Map(items.filter(task => task.sourceId).map(task => [
+    JSON.stringify([task.sourceId, task.flowId, task.configId, taskFlowStepId(task)]), task,
+  ])).values()]
+  let index = 0
+  await Promise.all(Array.from({ length: Math.min(3, targets.length) }, async () => {
+    while (taskMetadataActive && requestId === taskRequest && index < targets.length) {
+      const task = targets[index++]!
+      if (!taskFlowStepId(task) && task.configId && task.configId !== '0') await ensureTaskMetadata(task)
+      if (!taskMetadataActive || requestId !== taskRequest) return
+      await ensureTaskType(task)
+    }
+  }))
 }
 
 // 任务中心（global）左列表右详情（1105 会议，对齐代码生成任务页）：详情常驻右侧，不开抽屉
 function openDetail(task: TaskInst) {
   detailTask.value = task
   detailVisible.value = !props.global
-  if (task.sourceId) void ensureTaskMetadata(task)
+  if (task.sourceId) void ensureTaskMetadata(task).then(() => ensureTaskType(task))
 }
 
 // 「保存时 JSON」抽屉（2026-11-10，钉钉反馈）：任务行可直接开，按任务 ID 预填，
@@ -594,6 +653,7 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     if (requestId !== taskRequest) return
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
+    void loadPageTaskMetadata(rows.value, requestId)
     // 自动刷新后右侧详情换成同一任务的最新一行，状态和结果才跟得上
     const shown = detailTask.value
     const fresh = shown ? rows.value.find((row) => row.taskId === shown.taskId) : undefined
@@ -728,12 +788,7 @@ function resetFilters() {
 }
 
 function nodeName(task: TaskInst): string {
-  const step = matchedTaskStep(task)
-  if (step) return `${step.name} · ${step.stepId}`
-  const fromFlow = !props.global && task.configId
-    ? Object.values(flow.configs).find((cfg) => cfg.configId === task.configId)?.title
-    : undefined
-  return fromFlow || taskFlowStepId(task) || (task.configId && task.configId !== '0' ? `配置 ${task.configId}` : '—')
+  return taskFlowStepId(task) || stepIdOfTask(task) || '未记录'
 }
 function nodeRun(taskSourceId: string, nodeId?: string): NodeRunStat | undefined {
   return nodeRunsBySource.value[taskSourceId]?.find((run) => run.nodeId === nodeId)
@@ -923,7 +978,7 @@ const nextStepHints = computed(() => {
                 <span v-else class="muted">—</span>
                 <div class="tv-stack">
                   <span class="rc-status" :class="stateClass(task.state)"><span v-if="task.state === 'L'" class="tv-spin" />{{ stateText(task.state) }}</span>
-                  <span class="tv-sub">{{ task.typeName || '—' }}</span>
+                  <span class="tv-sub" data-testid="task-node-type">{{ nodeTypeName(task) }}</span>
                 </div>
               </td>
               <td>
@@ -941,7 +996,7 @@ const nextStepHints = computed(() => {
                   <span v-else class="muted">—</span>
                   <div v-if="task.sourceId && sourceNames[task.sourceId]" class="tv-source-id" data-testid="task-source-id">{{ task.sourceId }}</div>
                 </template>
-                <div class="tv-sub tv-ellipsis" :title="nodeName(task)">{{ nodeName(task) }}</div>
+                <div class="tv-sub tv-ellipsis" data-testid="task-flow-step" :title="nodeName(task)">{{ nodeName(task) }}</div>
               </td>
               <td>
                 <div class="tv-ellipsis" :title="task.taskName">{{ task.taskName || '—' }}</div>
@@ -1021,7 +1076,7 @@ const nextStepHints = computed(() => {
               <th>数据 ID</th>
               <th>任务 URL</th>
               <th>队列</th>
-              <th>类型</th>
+              <th>节点类型</th>
               <th>状态</th>
               <th>执行结果</th>
               <th>部署资源</th>
@@ -1059,7 +1114,7 @@ const nextStepHints = computed(() => {
                 <!-- 源名拿到了才另起一行显示 ID；没拿到时链接本身显示的就是 ID，不重复 -->
                 <div v-if="task.sourceId && sourceNames[task.sourceId]" class="tv-source-id" data-testid="task-source-id">{{ task.sourceId }}</div>
               </td>
-              <td>{{ nodeName(task) }}</td>
+              <td data-testid="task-flow-step">{{ nodeName(task) }}</td>
               <td>{{ task.taskName || '—' }}</td>
               <td>
                 <!-- 数据 ID 取 parentId（触发这条任务的数据），不是 bizId（运行上下文 ID），见 taskIds.ts -->
@@ -1095,7 +1150,7 @@ const nextStepHints = computed(() => {
               >
                 {{ queueName(task) }}
               </td>
-              <td>{{ task.typeName }}</td>
+              <td data-testid="task-node-type">{{ nodeTypeName(task) }}</td>
               <td>
                 <span class="rc-status" :class="stateClass(task.state)">
                   <span v-if="task.state === 'L'" class="tv-spin" />{{ stateText(task.state) }}
@@ -1146,6 +1201,7 @@ const nextStepHints = computed(() => {
             :closable="false"
             :source-name="sourceNames[detailTask.sourceId] || detailTask.sourceId"
             :step-name="nodeName(detailTask)"
+            :node-type-name="nodeTypeName(detailTask)"
             @locate-data="onLocateData"
             @open-source="openSource"
             @open-snapshots="openSnapshots"
@@ -1161,6 +1217,7 @@ const nextStepHints = computed(() => {
       :task="detailTask"
       :source-name="detailTask ? (sourceNames[detailTask.sourceId] || detailTask.sourceId) : ''"
       :step-name="detailTask ? nodeName(detailTask) : ''"
+      :node-type-name="detailTask ? nodeTypeName(detailTask) : ''"
       @locate-data="onLocateData"
       @open-source="openSource"
       @open-snapshots="openSnapshots"

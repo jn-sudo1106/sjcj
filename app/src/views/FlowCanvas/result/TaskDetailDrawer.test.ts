@@ -62,6 +62,7 @@ describe('TaskDetailDrawer', () => {
         task,
         sourceName: '财经源1',
         stepName: '详情解析节点',
+        nodeTypeName: '网页抓取',
       },
       global: {
         stubs: { ElDrawer: ElDrawerStub },
@@ -82,7 +83,7 @@ describe('TaskDetailDrawer', () => {
     // 父任务 ID 在 vars.pTaskId，不是 parentId
     expect(wrapper.find('[data-testid="task-detail-parentId"]').text()).toBe('88790')
     expect(wrapper.find('[data-testid="task-detail-fileId"]').text()).toBe('file_99')
-    expect(wrapper.find('[data-testid="task-detail-typeName"]').text()).toBe('详情抓取')
+    expect(wrapper.find('[data-testid="task-detail-typeName"]').text()).toBe('网页抓取')
     expect(wrapper.find('.rc-status.err').text()).toContain('异常')
 
     // 检查外链

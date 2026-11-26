@@ -12,6 +12,7 @@ const props = withDefaults(defineProps<{
   task: TaskInst | null
   sourceName?: string
   stepName?: string
+  nodeTypeName?: string
   closable?: boolean
 }>(), { closable: true })
 
@@ -55,7 +56,7 @@ const identityItems = computed<IdentityItem[]>(() => {
     { key: 'topic', label: '队列', value: textOf(task.topic) },
     { key: 'parentId', label: '父任务 ID', value: textOf(taskParentTaskId(task)) },
     { key: 'fileId', label: '文件 ID', value: textOf(task.fileId) },
-    { key: 'typeName', label: '任务类型', value: textOf(task.typeName) },
+    { key: 'typeName', label: '节点类型', value: textOf(props.nodeTypeName || '未记录') },
     { key: 'state', label: '状态', value: textOf(stateText(task.state)) },
     { key: 'taskUrl', label: '任务 URL', value: textOf(task.taskUrl), action: taskUrlHref ? 'url' : undefined, url: taskUrlHref },
   ]
