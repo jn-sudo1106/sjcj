@@ -19,6 +19,7 @@ async function setup(query: Record<string, string> = {}, role = 'admin') {
     ProcessorProcessesTab: { name: 'ProcessorProcessesTab', props: ['runnerId'], template: '<div class="running-instances">{{ runnerId }}</div>' },
     DeploymentResourcesTab: { name: 'DeploymentResourcesTab', props: { runnerId: String, resourcesOnly: Boolean }, emits: ['busy'], template: '<div class="resource-settings">{{ runnerId }}</div>' },
     RunnerFilesDrawer: { name: 'RunnerFilesDrawer', props: { runner: Object, directory: String, embedded: Boolean, workspace: Boolean, editable: Boolean }, template: '<div class="deployment-files">{{ runner.runnerId }}</div>' },
+    BatchDeploymentOperations: { name: 'BatchDeploymentOperations', emits: ['busy'], template: '<div class="batch-operations">批量操作</div>' },
     ElButton: { props: ['disabled'], template: '<button :disabled="disabled"><slot /></button>' },
     ElSelect: { name: 'ElSelect', props: ['modelValue', 'disabled'], emits: ['update:modelValue'], template: '<div><slot /></div>' },
     ElOption: true,
@@ -29,6 +30,28 @@ async function setup(query: Record<string, string> = {}, role = 'admin') {
   return { wrapper, router }
 }
 describe('服务器与机器配置统一页面', () => {
+  it('跨全部资源的批量操作独立于当前机器，执行期间锁定切换', async () => {
+    const { wrapper, router } = await setup()
+    await wrapper.get('[data-testid="deployment-batch-operations"]').trigger('click'); await flushPromises()
+    expect(router.currentRoute.value.query.view).toBe('batch')
+    const panel = wrapper.getComponent({ name: 'BatchDeploymentOperations' })
+    expect(panel.attributes('runner-id')).toBeUndefined()
+    expect(wrapper.find('.bindings').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="settings-server-workspace"]').classes()).toContain('is-batch')
+    expect(wrapper.find('.server-context').exists()).toBe(false)
+    panel.vm.$emit('busy', true); await flushPromises()
+    expect(wrapper.get('[data-testid="deployment-batch-operations"]').attributes('disabled')).toBeDefined()
+    panel.vm.$emit('busy', false); await flushPromises()
+    await wrapper.findAll('button').find(item => item.text() === '部署配置')!.trigger('click'); await flushPromises()
+    expect(wrapper.find('.bindings').exists()).toBe(true)
+    wrapper.unmount()
+  })
+  it('只读账号没有批量操作入口，手写地址仍回到只读配置视图', async () => {
+    const { wrapper } = await setup({ view: 'batch' }, 'read')
+    expect(wrapper.find('[data-testid="deployment-batch-operations"]').exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'BatchDeploymentOperations' }).exists()).toBe(false)
+    wrapper.unmount()
+  })
   it('部署空间浏览当前实例根目录，切换机器仍保留部署空间，不提供机器侧入口设置', async () => {
     const { wrapper, router } = await setup()
     await wrapper.get('[data-testid="deployment-workspace"]').trigger('click'); await flushPromises()

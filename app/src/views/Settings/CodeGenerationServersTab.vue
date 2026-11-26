@@ -40,6 +40,7 @@ watch(() => route.path === '/settings' && route.query.tab === 'code-servers' && 
   if (view === 'models' || view === 'files') void selectDetailView(view)
 })
 const servers = ref<CodeGenerationServer[]>([]), selectedId = ref(''), keyword = ref(''), error = ref('')
+const serverStatus = ref<'online' | 'offline' | 'all'>('online')
 const releases = ref<CodeServerRelease[]>([])
 const latestRelease = computed(() => releases.value[0])
 const upgradeLabels = { pending: '等待检查', waiting: '等待空闲', upgrading: '升级中', succeeded: '升级成功', failed: '升级失败，可重试' }
@@ -74,7 +75,8 @@ async function saveWorkspace(row: CodeGenerationServer) {
     ElMessage.success('工作空间已保存，下次生成时生效')
   })
 }
-const rows = computed(() => servers.value.filter(row => [row.name, row.ipAddress, row.serverId, row.workspace, row.generationRoot].join(' ').toLowerCase().includes(keyword.value.toLowerCase())))
+const rows = computed(() => servers.value.filter(row => (serverStatus.value === 'all' || row.status === serverStatus.value)
+  && [row.name, row.ipAddress, row.serverId, row.workspace, row.generationRoot].join(' ').toLowerCase().includes(keyword.value.toLowerCase())))
 watch([rows, busy], () => {
   if (!busy.value && requestedTarget.value && linkedTargetKey !== requestedTarget.value.key) { void openLinkedTarget(); return }
   if (busy.value || rows.value.some(row => row.serverId === selectedId.value)) return
@@ -158,6 +160,7 @@ async function openLinkedTarget() {
   if (!server) { selectedId.value = target.id; error.value = '任务对应的智能体资源不存在或已删除'; return }
   linkedTargetKey = target.key
   detailView.value = target.view
+  if (serverStatus.value !== 'all' && serverStatus.value !== server.status) serverStatus.value = server.status
   keyword.value = ''; selectedId.value = server.serverId; files.value = []; selection.value = []; detail.value = false; resetFileSearch()
   bindingOpen.value = false; ++bindingSequence; ++fileSequence
   if (target.view === 'models') { error.value = ''; return }
@@ -309,6 +312,11 @@ async function upgradeInstances(instances: CodeGenerationServer[]) {
       <aside class="cg-sidebar" aria-label="智能体资源">
         <div class="cg-sidebar-head"><b>服务器</b><span>{{ rows.length }}</span></div>
         <el-input v-model="keyword" placeholder="搜索名称、IP、实例 ID、工作空间" clearable class="cg-search" aria-label="筛选智能体资源" />
+        <el-select v-model="serverStatus" class="cg-search" aria-label="服务器在线状态" data-testid="code-server-status-filter">
+          <el-option label="在线" value="online" />
+          <el-option label="离线" value="offline" />
+          <el-option label="全部状态" value="all" />
+        </el-select>
         <div class="cg-server-list">
           <div v-for="row in rows" :key="row.serverId" class="cg-server-card" :class="{ 'is-selected': selectedId === row.serverId }" role="button" :tabindex="busy ? -1 : 0" :aria-pressed="selectedId === row.serverId" :data-testid="`code-server-${row.serverId}`" @click="choose(row)" @keydown.enter.self="choose(row)" @keydown.space.self.prevent="choose(row)">
             <div class="cg-server-heading"><b :title="row.name">{{ row.name }}</b><el-tag :type="row.status === 'online' ? 'success' : 'info'" size="small">{{ row.status === 'online' ? '在线' : '离线' }}</el-tag></div>
@@ -326,7 +334,7 @@ async function upgradeInstances(instances: CodeGenerationServer[]) {
           </template>
         </div>
           </div>
-          <el-empty v-if="!rows.length" :image-size="52" :description="keyword ? '没有匹配的服务器' : '暂无智能体资源'" />
+          <el-empty v-if="!rows.length" :image-size="52" :description="keyword ? '没有匹配的服务器' : serverStatus === 'online' ? '暂无在线服务器' : serverStatus === 'offline' ? '暂无离线服务器' : '暂无智能体资源'" />
         </div>
       </aside>
       <section class="cg-main" aria-label="服务器配置与工作空间" data-testid="code-server-workspace-panel">

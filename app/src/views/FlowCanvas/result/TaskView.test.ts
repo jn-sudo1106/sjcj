@@ -9,7 +9,7 @@ import RailResizeHandle from './RailResizeHandle.vue'
 import JsonSnapshotDrawer from '@/views/CollectAssets/JsonSnapshotDrawer.vue'
 import TaskViewSource from './TaskView.vue?raw'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
-import { dataApi, siteApi, sourceApi, type TaskInst } from '@/api'
+import { dataApi, siteApi, sourceApi, configApi, flowCenterApi, workflowBindingApi, type TaskInst } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useAuthStore } from '@/stores/auth'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -17,6 +17,11 @@ import { runnerManagementApi } from '@/api/runnerManagement'
 import TaskExecutionResourceCell from './TaskExecutionResourceCell.vue'
 
 const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+beforeEach(() => {
+  vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({} as never)
+  vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([])
+  vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
+})
 
 // 0930-02 起流程节点轨道进来恒收起。既有用例大多测轨道本身，默认按"已展开"跑；测默认值的用例自己改成 false
 const railDefault = vi.hoisted(() => ({ open: true }))
@@ -1329,6 +1334,118 @@ it('源态收起「所属源」列，执行结果与部署资源列均计入空�
 
 describe('TaskView · 任务中心左列表右详情（1105 会议）', () => {
   afterEach(() => vi.restoreAllMocks())
+
+  it('列表显示真实 stepId 与配置的节点类型，动作名和任务名称不参与推断', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const tasks = [
+      { taskId: '74973441', sourceId: '430024903', stepId: '41895', configId: '1401218', state: 'C',
+        typeName: '浏览器抓取', taskName: '贝特利-新闻资讯-产品动态-301697', updatedAt: '' },
+      { taskId: '74973442', sourceId: '430024903', stepId: '41985', configId: '1401281', state: 'C',
+        typeName: '浏览器抓取', taskName: '后续规则任务', updatedAt: '' },
+    ] as TaskInst[]
+    vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 2, list: tasks })
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    vi.mocked(configApi.configDetailRaw).mockImplementation(async id => ({ configType: id === '1401218' ? '90' : '600' }) as never)
+    const wrapper = shallowMount(TaskView, {
+      props: { global: true }, global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="task-flow-step"]').map(item => item.text())).toEqual(['41895', '41985'])
+    expect(wrapper.findAll('[data-testid="task-node-type"]').map(item => item.text())).toEqual(['网页抓取', '规则处理'])
+    expect(wrapper.get('tbody').text()).toContain(tasks[0]!.taskName)
+    expect(wrapper.get('tbody').text()).not.toContain('浏览器抓取')
+    expect(configApi.configDetailRaw).toHaveBeenCalledTimes(2)
+    expect(flowCenterApi.steps).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('跨源任务自动补查实际步骤，共享流程仅读取一次，无结果时不显示配置 ID', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const tasks = ['430024903', '430024910'].map((sourceId, index) => ({
+      taskId: String(74973441 + index), sourceId, stepId: '0', configId: '1401218', state: 'C', typeName: '浏览器抓取', updatedAt: '',
+    })) as TaskInst[]
+    vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 2, list: tasks })
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
+    vi.spyOn(sourceApi, 'sourceNodeRuns').mockResolvedValue([])
+    vi.mocked(workflowBindingApi.list).mockResolvedValue([{ workflowId: '21000040' }] as never)
+    let finish!: (value: never) => void
+    vi.mocked(flowCenterApi.steps).mockReturnValue(new Promise(resolve => { finish = resolve }))
+    const wrapper = shallowMount(TaskView, {
+      props: { global: true }, global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="task-flow-step"]').map(item => item.text())).toEqual(['未记录', '未记录'])
+    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(2)
+    finish([{ stepId: '41895', configId: '1401218', name: 'AI智能采集', configType: '90' }] as never)
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="task-flow-step"]').map(item => item.text())).toEqual(['41895', '41895'])
+    expect(flowCenterApi.steps).toHaveBeenCalledTimes(1)
+    expect(sourceApi.sourceSteps).toHaveBeenCalledTimes(2)
+    expect(configApi.configDetailRaw).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('任务详情按步骤或配置解析流程节点，执行节点 IP 不作名称兜底，运行统计失败不影响节点名称', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const task = { taskId: '74920147', sourceId: '430024903', node: '172.18.0.1',
+      configId: '1401218', stepId: '41895', state: 'C', typeName: '浏览器抓取', updatedAt: '' } as TaskInst
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 1, list: [task] })
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      { stepId: '41895', configId: '1401218', name: 'AI智能采集' },
+    ] as never)
+    vi.spyOn(sourceApi, 'sourceNodeRuns').mockRejectedValue(new Error('统计暂不可用'))
+    const wrapper = shallowMount(TaskView, {
+      props: { global: true }, global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await flushPromises()
+    await wrapper.get('[data-testid="task-row"]').trigger('click'); await flushPromises()
+    const detail = () => wrapper.getComponent({ name: 'TaskDetailContent' })
+    expect(detail().props('stepName')).toBe('41895')
+    paged.mockResolvedValue({ total: 1, list: [{ ...task, stepId: undefined, configId: 'missing' }] })
+    await wrapper.get('[data-testid="task-refresh"]').trigger('click'); await flushPromises()
+    expect(detail().props('stepName')).toBe('未记录')
+    expect(detail().props('stepName')).not.toContain('172.18.0.1')
+    wrapper.unmount()
+  })
+
+  it('stepId 为 0 时根据源绑定的非默认流程及配置 1401218 找回节点 41895', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const task = { taskId: '74920147', sourceId: '430024903', node: '172.18.0.1', stepId: '0', flowId: '0',
+      configId: '1401218', state: 'C', typeName: '浏览器抓取', updatedAt: '' } as TaskInst
+    vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 1, list: [task] })
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      { stepId: '41352', configId: '1400935', name: '默认采集节点' },
+    ] as never)
+    vi.spyOn(sourceApi, 'sourceNodeRuns').mockResolvedValue([])
+    const bindings = vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([
+      { workflowId: '14009350' }, { workflowId: '21000040' },
+    ] as never)
+    const nodes = vi.spyOn(flowCenterApi, 'steps').mockImplementation(async id => id === '21000040' ? [
+      { stepId: '41895', configId: '1401218', name: 'AI智能采集', configType: '90' },
+    ] as never : [])
+    const wrapper = shallowMount(TaskView, {
+      props: { global: true }, global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="task-flow-step"]').text()).toBe('41895')
+    expect(wrapper.get('[data-testid="task-node-type"]').text()).toBe('网页抓取')
+    expect(wrapper.get('[data-testid="task-flow-step"]').text()).not.toContain('1401218')
+    await wrapper.get('[data-testid="task-row"]').trigger('click'); await flushPromises()
+    expect(bindings).toHaveBeenCalledWith(task.sourceId, { withNames: false })
+    expect(nodes).toHaveBeenCalledWith('21000040', { withConfigDetails: false })
+    expect(wrapper.getComponent({ name: 'TaskDetailContent' }).props('stepName')).toBe('41895')
+    expect(wrapper.getComponent({ name: 'TaskDetailContent' }).props('nodeTypeName')).toBe('网页抓取')
+    await wrapper.get('[data-testid="task-row"]').trigger('click'); await flushPromises()
+    expect(bindings).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
 
   const tasks = [
     { taskId: '501', sourceId: '391007768', state: 'E', taskName: '抓取列表', typeName: '采集', parentId: '9001', taskUrl: 'https://a.example/1', createdAt: '2026-11-06 09:00:00' },

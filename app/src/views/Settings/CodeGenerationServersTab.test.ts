@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import ElementPlus, { ElMessageBox } from 'element-plus'
+import ElementPlus, { ElMessageBox, ElSelect } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { runnerManagementApi as api, type CodeGenerationServer, type RemoteCodeFile } from '@/api/runnerManagement'
 import CodeGenerationServersTab from './CodeGenerationServersTab.vue'
@@ -144,6 +144,7 @@ it('左右分栏选择服务器切换右侧工作空间，离线机器不请求�
   const w = await setup()
   expect(w.get('[data-testid="code-server-split-layout"] .cg-sidebar').text()).toContain(server.name)
   expect(w.get('[data-testid="code-server-remote-1"]').attributes('aria-pressed')).toBe('true')
+  w.getComponent(ElSelect).vm.$emit('update:modelValue', 'all'); await flushPromises()
   await w.get('[data-testid="code-server-remote-2"]').trigger('click'); await flushPromises()
   expect(w.get('[data-testid="code-server-workspace-panel"] .cg-workspace-head').text()).toContain(second.name)
   expect(w.get('[data-testid="code-server-workspace-panel"]').text()).toContain('服务器离线')
@@ -153,6 +154,48 @@ it('左右分栏选择服务器切换右侧工作空间，离线机器不请求�
   await w.get('[data-testid="code-server-remote-1"]').trigger('keydown', { key: 'Enter' }); await flushPromises()
   expect(w.get('.cg-workspace-head').text()).toContain(server.name)
   expect(api.remoteCodeFiles).toHaveBeenLastCalledWith(server.serverId, { action: 'list', path: '' })
+})
+it('服务器默认只显示在线，可切换离线和全部并叠加搜索，刷新保留筛选', async () => {
+  const offline: CodeGenerationServer = { ...server, serverId: 'offline-1', name: '离线机器', status: 'offline' }
+  vi.mocked(api.codeGenerationServers).mockResolvedValue({ items: [offline, server] })
+  const w = await setup()
+  const status = w.getComponent(ElSelect)
+  expect(status.props('modelValue')).toBe('online')
+  expect(w.find('[data-testid="code-server-offline-1"]').exists()).toBe(false)
+  expect(w.get('[data-testid="code-server-remote-1"]').attributes('aria-pressed')).toBe('true')
+  expect(w.get('.cg-sidebar-head').text()).toContain('1')
+  const calls = vi.mocked(api.codeGenerationServers).mock.calls.length
+  status.vm.$emit('update:modelValue', 'offline'); await flushPromises()
+  expect(w.find('[data-testid="code-server-remote-1"]').exists()).toBe(false)
+  expect(w.get('[data-testid="code-server-offline-1"]').attributes('aria-pressed')).toBe('true')
+  expect(api.remoteCodeFiles).not.toHaveBeenCalledWith(offline.serverId, expect.anything())
+  status.vm.$emit('update:modelValue', 'all'); await flushPromises()
+  expect(w.findAll('.cg-server-card')).toHaveLength(2)
+  await w.get('[aria-label="筛选智能体资源"]').setValue('离线机器'); await flushPromises()
+  expect(w.findAll('.cg-server-card')).toHaveLength(1)
+  expect(api.codeGenerationServers).toHaveBeenCalledTimes(calls)
+  await w.findAll('button').find(button => button.text() === '刷新')!.trigger('click'); await flushPromises()
+  expect(status.props('modelValue')).toBe('all')
+  expect(w.findAll('.cg-server-card')).toHaveLength(1)
+})
+it('没有在线服务器时显示对应空态，切换离线后可查看资源', async () => {
+  vi.mocked(api.codeGenerationServers).mockResolvedValue({ items: [{ ...server, status: 'offline' }] })
+  const w = await setup()
+  expect(w.get('.cg-sidebar').text()).toContain('暂无在线服务器')
+  expect(w.findAll('.cg-server-card')).toHaveLength(0)
+  expect(api.remoteCodeFiles).not.toHaveBeenCalled()
+  w.getComponent(ElSelect).vm.$emit('update:modelValue', 'offline'); await flushPromises()
+  expect(w.findAll('.cg-server-card')).toHaveLength(1)
+  expect(w.get('.cg-workspace-head').text()).toContain(server.name)
+})
+it('任务链接仍能定位离线服务器，并切换到离线筛选', async () => {
+  const offline: CodeGenerationServer = { ...server, serverId: 'offline-1', name: '离线机器', status: 'offline' }
+  vi.mocked(api.codeGenerationServers).mockResolvedValue({ items: [server, offline] })
+  const w = await setup('admin', { tab: 'code-servers', view: 'models', serverId: offline.serverId })
+  expect(w.getComponent(ElSelect).props('modelValue')).toBe('offline')
+  expect(w.get('[data-testid="code-server-offline-1"]').attributes('aria-pressed')).toBe('true')
+  expect(w.get('.mi-server-context').text()).toContain(offline.name)
+  expect(api.remoteCodeFiles).not.toHaveBeenCalled()
 })
 it('左侧筛选同步工作空间选择，没有匹配时清空右侧文件上下文', async () => {
   const second = { ...server, serverId: 'remote-2', name: '机器 B', ipAddress: '192.168.1.172' }

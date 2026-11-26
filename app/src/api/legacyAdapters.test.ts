@@ -1170,6 +1170,11 @@ describe('源的流程字段兼容 defaultFlowId（1008-01）', () => {
 })
 
 describe('任务实例字段适配', () => {
+  it('执行节点 nodeCode 与流程步骤 stepId 独立保留', () => {
+    expect(taskInstFromLegacy({ taskId: 74920147, nodeCode: '172.18.0.1', stepId: 41895 })).toMatchObject({
+      taskId: '74920147', node: '172.18.0.1', stepId: '41895',
+    })
+  })
   it('对照旧 column.config TASK_LIST：actionName/nodeCode/taskTopic/updateDt', () => {
     expect(taskInstFromLegacy({
       taskId: '8348509120',

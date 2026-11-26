@@ -333,6 +333,7 @@ export interface DeploymentSourceNode {
   configId: string
 }
 export interface DeploymentConfiguration extends DirectoryLayout {
+  deploymentEnvironment?: 'test' | 'production'
   entryConfigurationId?: string
   managedBy?: string
   deploymentId: string
@@ -891,6 +892,25 @@ export const runnerManagementApi = {
     request<CodeRepositoryFilePage>(`/settings/code-repos/${encodeURIComponent(repoId)}/files?keyword=${encodeURIComponent(keyword)}&page=${page}${directoryId ? '&directoryId=' + encodeURIComponent(directoryId) : ''}${folder !== undefined ? '&view=directory&folder=' + encodeURIComponent(folder) : ''}&sort=${sort}`),
   codeRepositoryFileContent: (repoId: string, path: string) =>
     request<CodeRepositoryFileContent>(`/settings/code-repos/${encodeURIComponent(repoId)}/files/content?path=${encodeURIComponent(path)}`),
+  downloadCodeRepositoryFiles: async (repoId: string, paths: string[]) => {
+    const token = readStoredToken()
+    let response: Response
+    try {
+      response = await fetch(`/api/runner-management/settings/code-repos/${encodeURIComponent(repoId)}/files/download`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...(token ? { [ACCESS_TOKEN_HEADER]: token } : {}) },
+        body: JSON.stringify({ paths }),
+      })
+    } catch { throw new Error('Runner 管理服务不可达') }
+    await checkBusinessSession(response)
+    if (!response.ok) {
+      const error = await response.json().catch(() => null) as { message?: string } | null
+      throw new Error(error?.message || `仓库文件下载失败（HTTP ${response.status}）`)
+    }
+    if (!response.headers.get('Content-Type')?.includes('application/zip')) throw new Error('仓库文件下载格式不正确，请重试')
+    const name = response.headers.get('Content-Disposition')?.match(/filename="(repository-[a-f0-9]+\.zip)"/)?.[1] || 'repository-files.zip'
+    return { name, blob: await response.blob() }
+  },
   browseCodeRepository: (repoId: string, commit: string, path: string, action: 'list' | 'read' = 'list') =>
     request<{ path: string; gitCommit: string; items?: Omit<RemoteCodeFile, 'modifiedAt'>[]; truncated?: boolean; content?: string; size?: number; sha256?: string }>(`/settings/code-repos/${encodeURIComponent(repoId)}/browse?commit=${encodeURIComponent(commit)}&path=${encodeURIComponent(path)}&action=${action}`),
   codeRepositoryFileReferences: (repoId: string, path: string) => request<RepositoryFileReferences>(`/settings/code-repos/${encodeURIComponent(repoId)}/files/references?path=${encodeURIComponent(path)}`),

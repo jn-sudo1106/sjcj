@@ -120,6 +120,25 @@ class RuntimeHistoryTest(unittest.TestCase):
     def records(self):
         return self.request('/api/runner-management/runtime-operations?since=&runtimeId=' + self.runtime['runtimeId'])['items']
 
+    def test_worker_receives_own_runner_id_instead_of_inherited_identity(self):
+        self.fixture('import os,json,time\nfrom pathlib import Path\n'
+                     'Path("worker-identity.json").write_text(json.dumps({key:os.environ.get(key) '
+                     'for key in ("RUNNER_ID","RUNNER_INSTANCE_DIR","RUNNER_WORKER_TOKEN")}))\n'
+                     'time.sleep(60)\n', concurrency=1)
+        with patch.dict(os.environ, {'RUNNER_ID': 'inherited-from-another-runner'}):
+            self.start()
+            observed = self.runner.directory / 'program' / 'worker-identity.json'
+            deadline = time.monotonic() + 8
+            while not observed.is_file() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(observed.is_file(), self.runner.last_error)
+            context = json.loads(observed.read_text())
+            self.assertEqual(context['RUNNER_ID'], self.runner.identity['runnerId'])
+            self.assertEqual(context['RUNNER_INSTANCE_DIR'], str(self.runner.directory))
+            self.assertNotEqual(context['RUNNER_ID'], context['RUNNER_WORKER_TOKEN'])
+            self.assertTrue(context['RUNNER_WORKER_TOKEN'])
+            self.assertEqual(os.environ['RUNNER_ID'], 'inherited-from-another-runner')
+
     def test_process_logs_match_runner_assignment_pid_and_slot(self):
         self.fixture(); self.start(); self.runner.tick(); self.drain()
         items = self.request('/api/runner-management/processes')['items']

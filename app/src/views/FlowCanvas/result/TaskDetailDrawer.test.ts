@@ -40,6 +40,20 @@ describe('TaskDetailDrawer', () => {
     vi.restoreAllMocks()
   })
 
+  it('执行节点 IP 不当作流程节点，真实步骤单独展示', async () => {
+    const wrapper = mount(TaskDetailDrawer, {
+      props: { modelValue: true, task: mockTask({ node: '172.18.0.1' }) },
+      global: { stubs: { ElDrawer: ElDrawerStub, TaskExecutionLinks: true } },
+    })
+    expect(wrapper.get('[data-testid="task-detail-nodeName"]').text()).toBe('—')
+    expect(wrapper.get('[data-testid="task-detail-executionNode"]').text()).toBe('172.18.0.1')
+    await wrapper.setProps({ task: mockTask({ node: '172.18.0.1', stepId: '41895' }) })
+    expect(wrapper.get('[data-testid="task-detail-nodeName"]').text()).toBe('41895')
+    await wrapper.setProps({ task: mockTask({ node: '172.18.0.1', stepId: '0' }), stepName: '0' })
+    expect(wrapper.get('[data-testid="task-detail-nodeName"]').text()).toBe('—')
+    wrapper.unmount()
+  })
+
   it('正确渲染抽屉标题与标识区字段', () => {
     const task = mockTask()
     const wrapper = mount(TaskDetailDrawer, {
@@ -48,6 +62,7 @@ describe('TaskDetailDrawer', () => {
         task,
         sourceName: '财经源1',
         stepName: '详情解析节点',
+        nodeTypeName: '网页抓取',
       },
       global: {
         stubs: { ElDrawer: ElDrawerStub },
@@ -68,7 +83,7 @@ describe('TaskDetailDrawer', () => {
     // 父任务 ID 在 vars.pTaskId，不是 parentId
     expect(wrapper.find('[data-testid="task-detail-parentId"]').text()).toBe('88790')
     expect(wrapper.find('[data-testid="task-detail-fileId"]').text()).toBe('file_99')
-    expect(wrapper.find('[data-testid="task-detail-typeName"]').text()).toBe('详情抓取')
+    expect(wrapper.find('[data-testid="task-detail-typeName"]').text()).toBe('网页抓取')
     expect(wrapper.find('.rc-status.err').text()).toContain('异常')
 
     // 检查外链

@@ -13,6 +13,7 @@ vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: {
   codeRepositoryFiles: vi.fn(), codeRepositoryFileContent: vi.fn(), deleteCodeRepositoryFile: vi.fn(),
   codeRepositoryDirectories: vi.fn(), saveCodeRepositoryDirectory: vi.fn(), removeCodeRepositoryDirectory: vi.fn(),
   codeRepositoryFileReferences: vi.fn(),
+  downloadCodeRepositoryFiles: vi.fn(),
   setGenerationTypeDefault: vi.fn(),
 } }))
 const generic: CodeRepository = {
@@ -44,12 +45,79 @@ beforeEach(() => {
   setActivePinia(createPinia())
   useAuthStore().roles = ['admin']
 })
-afterEach(() => { vi.restoreAllMocks(); vi.resetAllMocks() })
+afterEach(() => { vi.restoreAllMocks(); vi.resetAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers() })
 async function mountTab() {
   const wrapper = mount(CodeRepositoryTab, { global: { stubs, directives: { loading: {} } } })
   await flushPromises()
   return wrapper
 }
+it('只读账号也可勾选仓库文件并下载 ZIP，勾选不会触发预览', async () => {
+  useAuthStore().roles = ['reader']
+  vi.mocked(runnerManagementApi.codeRepositoryFiles).mockResolvedValue({ repoId: generic.repoId, uploadDirectory: 'default', total: 3, page: 1, pageSize: 50, items: [
+    { path: 'links', kind: 'directory', size: null, managed: false, canDelete: false, gitUrl: '' },
+    { path: 'sites/main.py', kind: 'file', size: 20, managed: true, canDelete: false, gitUrl: '' },
+    { path: 'requirements.txt', kind: 'file', size: 10, managed: true, canDelete: false, gitUrl: '' },
+  ] })
+  const wrapper = await mountTab()
+  const create = vi.fn(() => 'blob:repository-download'), revoke = vi.fn()
+  const OriginalURL = URL
+  vi.stubGlobal('URL', class extends OriginalURL { static createObjectURL = create; static revokeObjectURL = revoke })
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  vi.useFakeTimers({ toFake: ['setTimeout'] })
+  const blob = new Blob(['zip'], { type: 'application/zip' })
+  vi.mocked(runnerManagementApi.downloadCodeRepositoryFiles).mockResolvedValue({ name: 'repository-test.zip', blob })
+  expect(wrapper.get('[data-testid="code-repo-download-selected"]').attributes('disabled')).toBeDefined()
+  await wrapper.get('[aria-label="全选本页文件"]').setValue(true)
+  expect(wrapper.get('[data-testid="code-repo-download-selected"]').text()).toContain('2')
+  expect(wrapper.findAll('.crp-file-checkbox input')).toHaveLength(3)
+  expect(runnerManagementApi.codeRepositoryFileContent).not.toHaveBeenCalled()
+  await wrapper.get('[data-testid="code-repo-download-selected"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.downloadCodeRepositoryFiles).toHaveBeenCalledWith(generic.repoId, ['sites/main.py', 'requirements.txt'])
+  expect(create).toHaveBeenCalledWith(blob)
+  expect(click).toHaveBeenCalledTimes(1)
+  expect(document.querySelector('a[download]')).toBeNull()
+  await vi.advanceTimersByTimeAsync(1000)
+  expect(revoke).toHaveBeenCalledWith('blob:repository-download')
+  wrapper.unmount()
+})
+it('跨页保留文件勾选，切换搜索、目录或仓库后清除勾选', async () => {
+  const file = (path: string) => ({ path, kind: 'file' as const, size: 1, managed: false, canDelete: true, gitUrl: '' })
+  vi.mocked(runnerManagementApi.codeRepositoryFiles).mockResolvedValue({ repoId: generic.repoId, uploadDirectory: 'default', total: 51, page: 1, pageSize: 50, items: [file('first.py')] })
+  const wrapper = await mountTab()
+  await wrapper.get('[aria-label="选择文件 first.py"]').setValue(true)
+  vi.mocked(runnerManagementApi.codeRepositoryFiles).mockResolvedValueOnce({ repoId: generic.repoId, uploadDirectory: 'default', total: 51, page: 2, pageSize: 50, items: [file('second.py')] })
+  await wrapper.findAll('button').find(button => button.text() === '下一页')!.trigger('click'); await flushPromises()
+  await wrapper.get('[aria-label="选择文件 second.py"]').setValue(true)
+  expect(wrapper.get('[data-testid="code-repo-download-selected"]').text()).toContain('2')
+  await wrapper.get('[data-testid="code-repo-files-keyword"]').setValue('second')
+  expect(wrapper.get('[data-testid="code-repo-download-selected"]').attributes('disabled')).toBeDefined()
+  await wrapper.get('[aria-label="选择文件 second.py"]').setValue(true)
+  await wrapper.get('[data-testid="code-repo-paths-view"]').trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-testid="code-repo-download-selected"]').attributes('disabled')).toBeDefined()
+  await wrapper.get('[aria-label="选择文件 first.py"]').setValue(true)
+  await wrapper.get('[data-testid="code-repo-repo-web"]').trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-testid="code-repo-download-selected"]').attributes('disabled')).toBeDefined()
+  wrapper.unmount()
+})
+it('下载失败保留勾选并显示实际错误，切换仓库后丢弃旧下载响应', async () => {
+  vi.mocked(runnerManagementApi.codeRepositoryFiles).mockResolvedValue({ repoId: generic.repoId, uploadDirectory: 'default', total: 1, page: 1, pageSize: 50, items: [
+    { path: 'main.py', size: 1, managed: false, canDelete: true, gitUrl: '' },
+  ] })
+  const wrapper = await mountTab()
+  await wrapper.get('[aria-label="选择文件 main.py"]').setValue(true)
+  vi.mocked(runnerManagementApi.downloadCodeRepositoryFiles).mockRejectedValueOnce(new Error('仓库文件不存在，请刷新列表后重试'))
+  await wrapper.get('[data-testid="code-repo-download-selected"]').trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-testid="code-repo-download-error"]').text()).toContain('仓库文件不存在')
+  expect(wrapper.get('[data-testid="code-repo-download-selected"]').text()).toContain('1')
+  let finish!: (value: { name: string; blob: Blob }) => void
+  vi.mocked(runnerManagementApi.downloadCodeRepositoryFiles).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  await wrapper.get('[data-testid="code-repo-download-selected"]').trigger('click')
+  await wrapper.get('[data-testid="code-repo-repo-web"]').trigger('click'); await flushPromises()
+  finish({ name: 'old.zip', blob: new Blob(['old']) }); await flushPromises()
+  expect(wrapper.find('[data-testid="code-repo-download-error"]').exists()).toBe(false)
+  expect(wrapper.get('[data-testid="code-repo-download-selected"]').attributes('disabled')).toBeDefined()
+  wrapper.unmount()
+})
 it('从部署配置进入 Git 目录后可返回原机器和配置范围，浏览仓库时保留返回入口', async () => {
   const wrapper = await mountTab()
   expect(wrapper.find('[data-testid="return-deployment-config"]').exists()).toBe(false)
