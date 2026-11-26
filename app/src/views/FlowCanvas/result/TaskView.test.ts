@@ -9,7 +9,7 @@ import RailResizeHandle from './RailResizeHandle.vue'
 import JsonSnapshotDrawer from '@/views/CollectAssets/JsonSnapshotDrawer.vue'
 import TaskViewSource from './TaskView.vue?raw'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
-import { dataApi, siteApi, sourceApi, type TaskInst } from '@/api'
+import { dataApi, siteApi, sourceApi, flowCenterApi, workflowBindingApi, type TaskInst } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useAuthStore } from '@/stores/auth'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -1329,6 +1329,62 @@ it('源态收起「所属源」列，执行结果与部署资源列均计入空�
 
 describe('TaskView · 任务中心左列表右详情（1105 会议）', () => {
   afterEach(() => vi.restoreAllMocks())
+
+  it('任务详情按步骤或配置解析流程节点，执行节点 IP 不作名称兜底，运行统计失败不影响节点名称', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const task = { taskId: '74920147', sourceId: '430024903', node: '172.18.0.1',
+      configId: '1401218', stepId: '41895', state: 'C', typeName: '浏览器抓取', updatedAt: '' } as TaskInst
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 1, list: [task] })
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      { stepId: '41895', configId: '1401218', name: 'AI智能采集' },
+    ] as never)
+    vi.spyOn(sourceApi, 'sourceNodeRuns').mockRejectedValue(new Error('统计暂不可用'))
+    const wrapper = shallowMount(TaskView, {
+      props: { global: true }, global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await flushPromises()
+    await wrapper.get('[data-testid="task-row"]').trigger('click'); await flushPromises()
+    const detail = () => wrapper.getComponent({ name: 'TaskDetailContent' })
+    expect(detail().props('stepName')).toBe('AI智能采集 · 41895')
+    paged.mockResolvedValue({ total: 1, list: [{ ...task, stepId: undefined, configId: 'missing' }] })
+    await wrapper.get('[data-testid="task-refresh"]').trigger('click'); await flushPromises()
+    expect(detail().props('stepName')).toBe('配置 missing')
+    expect(detail().props('stepName')).not.toContain('172.18.0.1')
+    wrapper.unmount()
+  })
+
+  it('stepId 为 0 时根据源绑定的非默认流程及配置 1401218 找回节点 41895', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const task = { taskId: '74920147', sourceId: '430024903', node: '172.18.0.1', stepId: '0', flowId: '0',
+      configId: '1401218', state: 'C', typeName: '浏览器抓取', updatedAt: '' } as TaskInst
+    vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 1, list: [task] })
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      { stepId: '41352', configId: '1400935', name: '默认采集节点' },
+    ] as never)
+    vi.spyOn(sourceApi, 'sourceNodeRuns').mockResolvedValue([])
+    const bindings = vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([
+      { workflowId: '14009350' }, { workflowId: '21000040' },
+    ] as never)
+    const nodes = vi.spyOn(flowCenterApi, 'steps').mockImplementation(async id => id === '21000040' ? [
+      { stepId: '41895', configId: '1401218', name: 'AI智能采集' },
+    ] as never : [])
+    const wrapper = shallowMount(TaskView, {
+      props: { global: true }, global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await flushPromises()
+    expect(bindings).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="task-row"]').trigger('click'); await flushPromises()
+    expect(bindings).toHaveBeenCalledWith(task.sourceId, { withNames: false })
+    expect(nodes).toHaveBeenCalledWith('21000040', { withConfigDetails: false })
+    expect(wrapper.getComponent({ name: 'TaskDetailContent' }).props('stepName')).toBe('AI智能采集 · 41895')
+    await wrapper.get('[data-testid="task-row"]').trigger('click'); await flushPromises()
+    expect(bindings).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
 
   const tasks = [
     { taskId: '501', sourceId: '391007768', state: 'E', taskName: '抓取列表', typeName: '采集', parentId: '9001', taskUrl: 'https://a.example/1', createdAt: '2026-11-06 09:00:00' },

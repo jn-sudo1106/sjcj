@@ -386,6 +386,11 @@ async function deleteUnbound(row: RuntimeConfiguration) {
   finally { controlling.value = ''; poll() }
 }
 function viewLogs(row: RuntimeConfiguration) { void router.replace({ path: '/settings', query: { tab: 'runtime-logs', runtimeId: row.runtimeId } }) }
+function openBatch(row: RuntimeConfiguration) {
+  const id = configurationId(row)
+  const batchConfig = id ? `config:${id}` : `deployment:${row.deploymentId}`
+  void router.replace({ path: '/settings', query: { tab: 'runners', view: 'batch', batchConfig, runnerId: props.runnerId || undefined } })
+}
 function deliver(row: RuntimeConfiguration) { if (canWrite.value && row.binding && !inFlight(row)) deliveryRow.value = row }
 function delivered(item: DirectoryDelivery) {
   rows.value = rows.value.map(row => row.binding?.bindingType === item.bindingType && row.binding.ownerId === item.ownerId && row.runnerId === item.runnerId
@@ -499,6 +504,7 @@ onUnmounted(() => { active = false; ++request; ++gitVersionRequest; stopPoll() }
                 <el-button v-if="canWrite && row.assignment" link type="danger" :disabled="loading || !!error || editing || saving || !!controlling || !row.assignment.enabled" :loading="controlling === row.runtimeId && row.assignment.enabled" data-testid="binding-stop" @click="controlProgram(row, false)">停止</el-button>
                 <el-button v-if="canWrite" link type="primary" :disabled="loading || !!error || editing || saving || !!controlling || inFlight(row)" @click="open(row)">编辑</el-button>
                 <el-button v-if="canWrite" link type="primary" :disabled="loading || !!error || !row.binding || inFlight(row) || editing || saving || !!controlling" data-testid="binding-deliver" @click="deliver(row)">下发代码</el-button>
+                <el-button v-if="canWrite" link type="primary" :disabled="loading || editing || saving || !!controlling" data-testid="binding-batch" @click="openBatch(row)">同配置批量</el-button>
                 <el-button v-if="row.deploymentId" link type="primary" :disabled="loading || editing || saving || !!controlling" data-testid="binding-edit-directory" @click="editMapping(row)">{{ canWrite ? '编辑目录' : '查看目录' }}</el-button>
                 <el-button v-if="canWrite" link type="danger" :disabled="loading || !!error || editing || saving || !!controlling || inFlight(row)" @click="remove(row)">移除</el-button>
               </div></td>

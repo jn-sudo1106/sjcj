@@ -18,6 +18,11 @@ function realId(value: unknown): string {
   return text && text !== '0' ? text : ''
 }
 
+/** 业务接口用 0 表示未记录步骤，不能展示为真实流程节点。 */
+export function taskFlowStepId(task: Pick<TaskInst, 'stepId'>): string {
+  return realId(task.stepId)
+}
+
 export function taskDataId(task: Pick<TaskInst, 'parentId'>): string {
   return realId(task.parentId)
 }

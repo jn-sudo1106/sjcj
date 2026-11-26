@@ -4,7 +4,7 @@ import { computed, onActivated, onDeactivated, onUnmounted, reactive, ref, watch
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { dataApi, siteApi, sourceApi, type NodeRunStat, type Source, type Step, type TaskInst } from '@/api'
+import { dataApi, siteApi, sourceApi, flowCenterApi, workflowBindingApi, type NodeRunStat, type Source, type Step, type TaskInst } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useAuthStore } from '@/stores/auth'
 import { confirmDanger } from '@/utils/confirmDanger'
@@ -24,7 +24,7 @@ import JsonSnapshotDrawer from '@/views/CollectAssets/JsonSnapshotDrawer.vue'
 import { buildHorizontalLayout, nodeTaskQueue } from '@/views/FlowCanvas/canvas/flowModel'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { nextStepTokens } from '@/utils/flow/nextStepFields'
-import { taskDataId } from './taskIds'
+import { taskDataId, taskFlowStepId } from './taskIds'
 import { parseTaskResult, TASK_RESULT_STATUS_TEXT } from '@/utils/flow/taskResult'
 import TaskExecutionResourceCell from './TaskExecutionResourceCell.vue'
 import { useTaskExecutions } from './useTaskExecutions'
@@ -281,7 +281,7 @@ async function loadNodeMetadata() {
           if (isSourceWithoutFlowError(e)) return []
           throw e
         }),
-        sourceApi.sourceNodeRuns(id),
+        sourceApi.sourceNodeRuns(id).catch(() => []),
       ])
       return { id, steps, nodeRuns }
     }))
@@ -343,13 +343,50 @@ const route = useRoute()
 const ws = useWorkspaceStore()
 const detailTask = ref<TaskInst | null>(null)
 const detailVisible = ref(false)
+const extraTaskSteps = ref<Record<string, Step[]>>({})
+const taskMetadataRequests = new Map<string, Promise<void>>()
+
+function taskSteps(task: TaskInst): Step[] {
+  return [...new Map([...(stepsBySource.value[task.sourceId] ?? []), ...(extraTaskSteps.value[task.sourceId] ?? [])]
+    .map(step => [step.stepId, step])).values()]
+}
+
+function matchedTaskStep(task: TaskInst): Step | undefined {
+  const steps = taskSteps(task), id = taskFlowStepId(task)
+  const byId = steps.find(step => step.stepId === (id || task.node))
+  if (byId) return byId
+  const matches = task.configId && task.configId !== '0' ? steps.filter(step => step.configId === task.configId) : []
+  return matches.length === 1 ? matches[0] : undefined
+}
+
+async function ensureTaskMetadata(task: TaskInst) {
+  if (!stepsBySource.value[task.sourceId]) await ensureSourceMetadata(task.sourceId)
+  if (matchedTaskStep(task) || (!taskFlowStepId(task) && (!task.configId || task.configId === '0'))) return
+  const key = JSON.stringify([task.sourceId, task.flowId, task.configId, taskFlowStepId(task)])
+  if (!taskMetadataRequests.has(key)) {
+    const request = (async () => {
+      // sourceSteps 只返回默认流程；任务可能来自该源绑定的其他流程。
+      const flowIds = task.flowId && task.flowId !== '0' ? [task.flowId]
+        : (await workflowBindingApi.list(task.sourceId, { withNames: false })).map(binding => binding.workflowId)
+      const results = await Promise.allSettled([...new Set(flowIds)].filter(id => id && id !== '0')
+        .map(id => flowCenterApi.steps(id, { withConfigDetails: false })))
+      extraTaskSteps.value = { ...extraTaskSteps.value, [task.sourceId]: [
+        ...(extraTaskSteps.value[task.sourceId] ?? []),
+        ...results.flatMap(result => result.status === 'fulfilled' ? result.value : []),
+      ] }
+      if (results.some(result => result.status === 'rejected')) taskMetadataRequests.delete(key)
+    })().catch(() => { taskMetadataRequests.delete(key) })
+    taskMetadataRequests.set(key, request)
+  }
+  await taskMetadataRequests.get(key)
+}
 
 async function ensureSourceMetadata(targetSourceId: string) {
   if (!targetSourceId || stepsBySource.value[targetSourceId]) return
   try {
     const [steps, nodeRuns] = await Promise.all([
       sourceApi.sourceSteps(targetSourceId),
-      sourceApi.sourceNodeRuns(targetSourceId),
+      sourceApi.sourceNodeRuns(targetSourceId).catch(() => []),
     ])
     stepsBySource.value = {
       ...stepsBySource.value,
@@ -360,7 +397,7 @@ async function ensureSourceMetadata(targetSourceId: string) {
       [targetSourceId]: nodeRuns,
     }
   } catch {
-    // 失败时不打扰，nodeName 会回退到 task.node
+    // 失败时不把执行节点标识误显示为流程节点。
   }
 }
 
@@ -368,9 +405,7 @@ async function ensureSourceMetadata(targetSourceId: string) {
 function openDetail(task: TaskInst) {
   detailTask.value = task
   detailVisible.value = !props.global
-  if (task.sourceId && !stepsBySource.value[task.sourceId]) {
-    void ensureSourceMetadata(task.sourceId)
-  }
+  if (task.sourceId) void ensureTaskMetadata(task)
 }
 
 // 「保存时 JSON」抽屉（2026-11-10，钉钉反馈）：任务行可直接开，按任务 ID 预填，
@@ -405,11 +440,7 @@ function closeSnapshots() {
  * 再按 configId 找回那一步。都找不到就**不传 nodeId**——传一个无效值只会留在 URL 里误导人。
  */
 function stepIdOfTask(task: TaskInst): string {
-  const steps = stepsBySource.value[task.sourceId] ?? []
-  const byStepId = steps.find((step) => step.stepId === task.node)
-  if (byStepId) return byStepId.stepId
-  const byConfig = task.configId ? steps.find((step) => step.configId === task.configId) : undefined
-  return byConfig?.stepId ?? ''
+  return matchedTaskStep(task)?.stepId ?? ''
 }
 
 /**
@@ -433,7 +464,7 @@ async function onLocateData(task: TaskInst) {
   const dataId = taskDataId(task)
   if (!dataId) return
   // 全局/网站任务列表不预加载全部源的步骤，定位单条数据时再查它所属源。
-  if (!stepsBySource.value[task.sourceId]) await ensureSourceMetadata(task.sourceId)
+  await ensureTaskMetadata(task)
   const nodeId = dataStepIdOfTask(task)
   void router.push({
     path: '/canvas',
@@ -697,27 +728,23 @@ function resetFilters() {
 }
 
 function nodeName(task: TaskInst): string {
-  const steps = stepsBySource.value[task.sourceId] ?? []
-  const byStepId = steps.find((step) => step.stepId === task.node)
-  if (byStepId) return byStepId.name
-  const byConfig = task.configId ? steps.find((step) => step.configId === task.configId) : undefined
-  if (byConfig) return byConfig.name
+  const step = matchedTaskStep(task)
+  if (step) return `${step.name} · ${step.stepId}`
   const fromFlow = !props.global && task.configId
     ? Object.values(flow.configs).find((cfg) => cfg.configId === task.configId)?.title
     : undefined
-  return fromFlow || task.node || '—'
+  return fromFlow || taskFlowStepId(task) || (task.configId && task.configId !== '0' ? `配置 ${task.configId}` : '—')
 }
 function nodeRun(taskSourceId: string, nodeId?: string): NodeRunStat | undefined {
   return nodeRunsBySource.value[taskSourceId]?.find((run) => run.nodeId === nodeId)
 }
 function queueName(task: TaskInst): string {
   if (task.topic) return task.topic
-  const runQueue = nodeRun(task.sourceId, task.node)?.queue
+  const runQueue = nodeRun(task.sourceId, taskFlowStepId(task) || task.node)?.queue
   if (runQueue) return runQueue
-  const steps = stepsBySource.value[task.sourceId] ?? []
   // ⚠️ `s.stepId === task.node` 这半边永远不成立（task.node 是 nodeCode/队列名，见 stepIdOfTask），
   // 真正起作用的是 configId 那半边。留着是因为后端哪天把 stepId 填上就自然生效。
-  const stepQueue = steps.find((s) => s.stepId === task.node || (task.configId && s.configId === task.configId))?.topic
+  const stepQueue = matchedTaskStep(task)?.topic
   if (stepQueue) return stepQueue
   // 原来这里还有一级 `flow.configs[task.configId]?.taskCfg?.queue`，**键用错了**：
   // configs 是按 stepId 键的（flowModel.seeds.ts 的 `configs[step.stepId] = ...`），

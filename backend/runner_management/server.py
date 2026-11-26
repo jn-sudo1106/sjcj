@@ -2094,7 +2094,8 @@ class Handler(BaseHTTPRequestHandler):
         file_read = (method == 'POST' and re.fullmatch(r'/code-servers/[0-9a-f-]+/files', sub)
                      and body.get('action') in ('list', 'read', 'export', 'download', 'logs'))
         batch_read = method == 'POST' and sub == '/business-task-executions/batch'
-        admin_identity = app.authenticate_admin(self.headers, self.client_address[0], write=(method != "GET" and not file_read and not batch_read) or sub.startswith('/runner-file-requests/'))
+        repository_download = method == 'POST' and re.fullmatch(r'/settings/code-repos/[0-9a-f]{32}/files/download', sub)
+        admin_identity = app.authenticate_admin(self.headers, self.client_address[0], write=(method != "GET" and not file_read and not batch_read and not repository_download) or sub.startswith('/runner-file-requests/'))
         if sub == '/monitor-batches' and method == 'POST':
             from .monitor_batches import create
             return create(app, body, self.headers, admin_identity)
@@ -2528,6 +2529,20 @@ class Handler(BaseHTTPRequestHandler):
             return browse(app, repo_tree.group(1), (query.get('commit') or [''])[0],
                           (query.get('path') or [''])[0], (query.get('action') or ['list'])[0])
         repo_files = re.fullmatch(r"/settings/code-repos/([0-9a-f]{32})/files", sub)
+        repo_download = re.fullmatch(r'/settings/code-repos/([0-9a-f]{32})/files/download', sub)
+        if repo_download and method == 'POST':
+            from .repository_download import package
+            import shutil
+            stream, name, size = package(app, repo_download.group(1), body.get('paths'))
+            with stream:
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/zip')
+                self.send_header('Content-Disposition', 'attachment; filename="' + name + '"')
+                self.send_header('Content-Length', str(size))
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                shutil.copyfileobj(stream, self.wfile)
+            return RESPONSE_SENT
         repo_metadata = re.fullmatch(r"/settings/code-repos/([0-9a-f]{32})/files/metadata", sub)
         repo_references = re.fullmatch(r'/settings/code-repos/([0-9a-f]{32})/files/references', sub)
         if repo_references and method == 'GET':

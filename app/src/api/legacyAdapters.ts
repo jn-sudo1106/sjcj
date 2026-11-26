@@ -992,6 +992,7 @@ export function taskInstFromLegacy(input: unknown): TaskInst {
     sourceId: String(record.sourceId ?? ''),
     configId: record.configId == null ? undefined : String(record.configId),
     node: record.nodeCode != null ? String(record.nodeCode) : (record.node == null ? undefined : String(record.node)),
+    stepId: record.stepId == null ? undefined : String(record.stepId),
     topic: record.taskTopic != null ? String(record.taskTopic) : (record.topic == null ? undefined : String(record.topic)),
     parentId: record.parentId == null ? undefined : String(record.parentId),
     updatedAt: String(record.updateDt ?? record.updatedAt ?? ''),

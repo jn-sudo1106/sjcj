@@ -10,6 +10,7 @@ import RunnerBindingTab from './RunnerBindingTab.vue'
 import ProcessorProcessesTab from './ProcessorProcessesTab.vue'
 import DeploymentResourcesTab from './DeploymentResourcesTab.vue'
 import RunnerFilesDrawer from './RunnerFilesDrawer.vue'
+import BatchDeploymentOperations from './BatchDeploymentOperations.vue'
 
 const route = useRoute(), router = useRouter()
 const auth = useAuthStore()
@@ -25,11 +26,11 @@ const isServerRoute = computed(() => route.path === '/settings' && ['runners', '
 const runnerId = computed(() => typeof route.query.runnerId === 'string' ? route.query.runnerId : '')
 const selected = computed(() => instances.value.find(item => item.runnerId === runnerId.value))
 const canViewBindings = computed(() => canAccess('settings:assignments'))
-const detailView = computed(() => route.query.view === 'files' ? 'files' : ['runner', 'resources'].includes(String(route.query.view)) ? 'runner' : route.query.view === 'instances' ? 'instances' : 'configurations')
+const detailView = computed(() => route.query.view === 'batch' && auth.role === 'admin' ? 'batch' : route.query.view === 'files' ? 'files' : ['runner', 'resources'].includes(String(route.query.view)) ? 'runner' : route.query.view === 'instances' ? 'instances' : 'configurations')
 function selectView(view: string) {
   if (busy.value) return
   if (view === 'configurations') bindingPanel.value?.resetFilters()
-  void router.replace({ path: '/settings', query: { ...route.query, tab: 'runners', configId: view === 'configurations' ? undefined : route.query.configId, view: view === 'configurations' ? undefined : view } })
+  void router.replace({ path: '/settings', query: { ...route.query, tab: 'runners', configId: view === 'configurations' ? undefined : route.query.configId, batchConfig: view === 'batch' ? route.query.batchConfig : undefined, view: view === 'configurations' ? undefined : view } })
 }
 const statusLabels = { online: '在线', offline: '离线', upgrading: '升级中', error: '异常' }
 function versionInfo(digest: string | null | undefined, empty: string) {
@@ -86,20 +87,22 @@ onActivated(reconcileSelection)
 </script>
 
 <template>
-  <section class="server-workspace" data-testid="settings-server-workspace">
+  <section class="server-workspace" :class="{ 'is-batch': detailView === 'batch' }" data-testid="settings-server-workspace">
     <RunnerManagementTab ref="serverManager" section="runners" compact :selectable="canViewBindings" :selected-runner-id="runnerId" :selection-disabled="busy" class="server-sidebar" @select-runner="selectRunner($event, true)" @instances-change="instances = $event" @visible-instances-change="visibleInstancesChanged" @releases-change="releases = $event" />
     <section class="server-main rc-card" :class="{ 'is-expanded': detailView === 'runner' }">
-      <header v-if="runnerId && canViewBindings" class="server-context">
+      <header v-if="runnerId && canViewBindings && detailView !== 'batch'" class="server-context">
         <div class="server-heading"><strong>{{ selected?.name || '服务器实例' }}</strong><span v-if="selected" class="server-status">{{ statusLabels[selected.status] }}</span><span v-if="selected" class="server-address">{{ selected.ipAddress }}</span></div>
         <div v-if="!selected" class="server-identity">实例 ID：{{ runnerId }}（尚未加载或已不存在）</div><div v-else-if="!visibleIds.includes(runnerId)" class="server-identity">当前实例不在左侧筛选结果中</div>
       </header>
-      <nav v-if="runnerId && canViewBindings" class="server-view-tabs" aria-label="部署资源视图">
+      <nav v-if="canViewBindings" class="server-view-tabs" aria-label="部署资源视图">
         <el-button :type="detailView === 'runner' ? 'primary' : 'default'" :disabled="busy" data-testid="runner-instance-info" @click="selectView('runner')">Runner 实例</el-button>
         <el-button :type="detailView === 'configurations' ? 'primary' : 'default'" :disabled="busy" @click="selectView('configurations')">部署配置</el-button>
         <el-button :type="detailView === 'instances' ? 'primary' : 'default'" :disabled="busy" data-testid="deployment-running-instances" @click="selectView('instances')">运行实例</el-button>
         <el-button :type="detailView === 'files' ? 'primary' : 'default'" :disabled="busy" data-testid="deployment-workspace" @click="selectView('files')">部署空间</el-button>
+        <el-button v-if="auth.role === 'admin'" :type="detailView === 'batch' ? 'primary' : 'default'" :disabled="busy" data-testid="deployment-batch-operations" @click="selectView('batch')">批量操作</el-button>
       </nav>
-      <section v-if="runnerId && canViewBindings && detailView === 'runner'" class="server-runner-information" data-testid="runner-instance-tab">
+      <BatchDeploymentOperations v-if="detailView === 'batch' && canViewBindings && auth.role === 'admin'" class="server-content" @busy="busy = $event" />
+      <section v-else-if="runnerId && canViewBindings && detailView === 'runner'" class="server-runner-information" data-testid="runner-instance-tab">
         <div class="server-runner-toolbar"><strong>Runner 实例</strong><div v-if="selected" class="server-info-actions"><el-button v-if="auth.role === 'admin'" link type="primary" :disabled="busy" data-testid="server-set-version" @click="serverManager?.editInstanceVersion(runnerId)">升级 Runner</el-button><el-button link type="primary" data-testid="server-open-detail" @click="serverManager?.openInstanceDetails(runnerId)">详情 / 进程</el-button></div></div>
         <div v-if="selected" class="server-summary" data-testid="server-machine-summary"><span class="server-summary-directory" :title="selected.installDirectory"><span>目录</span><code>{{ selected.installDirectory }}</code></span><span>PID {{ selected.runnerPid || '未上报' }}</span><span>进程 {{ selected.workerProcesses == null ? '未上报' : selected.workerProcesses.length }}</span><span :title="`${versionInfo(selected.actualDigest, '未上报')}\n${versionDate(selected.actualDigest)}`">Runner {{ shortVersion(selected.actualDigest) }}</span><span :title="'北京时间：' + formatRunnerHeartbeat(selected.lastHeartbeat)">心跳 {{ formatRunnerHeartbeat(selected.lastHeartbeat) }}</span></div>
         <p v-if="selected?.lastError" class="server-summary-error" :title="selected.lastError">异常：{{ selected.lastError }}</p>
@@ -120,6 +123,7 @@ onActivated(reconcileSelection)
 
 <style scoped>
 .server-view-tabs { display:flex; flex-wrap:wrap; gap:8px; padding:8px 12px; border-bottom:1px solid var(--rc-border-soft); }
+.server-workspace.is-batch { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); }.server-workspace.is-batch .server-sidebar { display:none; }
 .server-files { overflow:auto; padding:12px; }
 .server-resource-settings{padding:12px 0 0;min-width:0;overflow:visible}
 .server-workspace { display: grid; grid-template-columns: 280px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); align-items: stretch; flex: 1; min-width: 0; min-height: 0; gap: 14px; }

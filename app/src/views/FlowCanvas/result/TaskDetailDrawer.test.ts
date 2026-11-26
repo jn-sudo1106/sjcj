@@ -40,6 +40,20 @@ describe('TaskDetailDrawer', () => {
     vi.restoreAllMocks()
   })
 
+  it('执行节点 IP 不当作流程节点，真实步骤单独展示', async () => {
+    const wrapper = mount(TaskDetailDrawer, {
+      props: { modelValue: true, task: mockTask({ node: '172.18.0.1' }) },
+      global: { stubs: { ElDrawer: ElDrawerStub, TaskExecutionLinks: true } },
+    })
+    expect(wrapper.get('[data-testid="task-detail-nodeName"]').text()).toBe('—')
+    expect(wrapper.get('[data-testid="task-detail-executionNode"]').text()).toBe('172.18.0.1')
+    await wrapper.setProps({ task: mockTask({ node: '172.18.0.1', stepId: '41895' }) })
+    expect(wrapper.get('[data-testid="task-detail-nodeName"]').text()).toBe('41895')
+    await wrapper.setProps({ task: mockTask({ node: '172.18.0.1', stepId: '0' }), stepName: '0' })
+    expect(wrapper.get('[data-testid="task-detail-nodeName"]').text()).toBe('—')
+    wrapper.unmount()
+  })
+
   it('正确渲染抽屉标题与标识区字段', () => {
     const task = mockTask()
     const wrapper = mount(TaskDetailDrawer, {

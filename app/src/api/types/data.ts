@@ -238,7 +238,8 @@ export interface TaskInst {
   taskName: string
   sourceId: string
   configId?: string
-  node?: string // 执行节点
+  node?: string // 执行节点标识（nodeCode），不是流程步骤 ID
+  stepId?: string // 流程步骤 ID
   topic?: string // 主题
   parentId?: string
   updatedAt: string

@@ -4,7 +4,7 @@ import { fileApi, type JsonSnapshotRecord, type TaskInst } from '@/api'
 import { toExternalHref } from '@/utils/url/externalUrl'
 import { copyToClipboard } from '@/utils/clipboard'
 // 数据 ID = parentId、父任务 ID = vars.pTaskId，口径见 taskIds.ts
-import { taskDataId, taskParentTaskId } from './taskIds'
+import { taskDataId, taskParentTaskId, taskFlowStepId } from './taskIds'
 import TaskExecutionLinks from './TaskExecutionLinks.vue'
 
 // 任务详情正文：画布里由 TaskDetailDrawer 包成右侧抽屉，任务中心（1105 会议）直接放在列表右侧常驻显示
@@ -50,7 +50,8 @@ const identityItems = computed<IdentityItem[]>(() => {
     { key: 'taskId', label: '任务 ID', value: textOf(task.taskId), action: task.taskId ? 'copy' : undefined },
     { key: 'bizId', label: '数据 ID', value: textOf(taskDataId(task)), action: taskDataId(task) ? 'locateData' : undefined },
     { key: 'sourceName', label: '所属源', value: textOf(props.sourceName || task.sourceId), action: task.sourceId ? 'openSource' : undefined },
-    { key: 'nodeName', label: '流程节点', value: textOf(props.stepName || task.node) },
+    { key: 'nodeName', label: '流程节点', value: textOf((props.stepName !== '0' && props.stepName) || taskFlowStepId(task)) },
+    { key: 'executionNode', label: '执行节点', value: textOf(task.node) },
     { key: 'topic', label: '队列', value: textOf(task.topic) },
     { key: 'parentId', label: '父任务 ID', value: textOf(taskParentTaskId(task)) },
     { key: 'fileId', label: '文件 ID', value: textOf(task.fileId) },

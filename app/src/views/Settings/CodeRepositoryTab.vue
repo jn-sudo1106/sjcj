@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Folder, List } from '@element-plus/icons-vue'
 import { RouterLink } from 'vue-router'
@@ -60,6 +60,34 @@ const filePage = ref(1)
 const fileTotal = ref(0)
 const fileLoading = ref(false)
 const fileError = ref('')
+const selectedFiles = ref<string[]>([]), downloadingFiles = ref(false), downloadError = ref('')
+const pageFiles = computed(() => fileRows.value.filter(file => file.kind !== 'directory'))
+const allPageFilesSelected = computed(() => !!pageFiles.value.length && pageFiles.value.every(file => selectedFiles.value.includes(file.path)))
+const somePageFilesSelected = computed(() => pageFiles.value.some(file => selectedFiles.value.includes(file.path)))
+const downloadScope = computed(() => JSON.stringify([selectedRepoId.value, selectedDirectory.value?.directoryId, folderPath.value, fileView.value, fileKeyword.value, fileSort.value]))
+watch(downloadScope, () => { selectedFiles.value = []; downloadError.value = '' }, { flush: 'sync' })
+let downloadStopped = false
+onBeforeUnmount(() => { downloadStopped = true })
+function selectDownloadFile(path: string, checked: boolean) {
+  selectedFiles.value = checked ? [...new Set([...selectedFiles.value, path])] : selectedFiles.value.filter(value => value !== path)
+}
+function selectPageFiles(checked: boolean) {
+  const paths = pageFiles.value.map(file => file.path)
+  selectedFiles.value = checked ? [...new Set([...selectedFiles.value, ...paths])] : selectedFiles.value.filter(path => !paths.includes(path))
+}
+async function downloadSelectedFiles() {
+  if (!filesRepo.value || !selectedFiles.value.length || downloadingFiles.value) return
+  const repoId = filesRepo.value.repoId, scope = downloadScope.value, paths = [...selectedFiles.value]
+  downloadingFiles.value = true; downloadError.value = ''
+  try {
+    const { blob, name } = await runnerManagementApi.downloadCodeRepositoryFiles(repoId, paths)
+    if (downloadStopped || scope !== downloadScope.value) return
+    const url = URL.createObjectURL(blob), link = document.createElement('a')
+    try { link.href = url; link.download = name; document.body.appendChild(link); link.click() }
+    finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000) }
+  } catch (e) { if (!downloadStopped && scope === downloadScope.value) downloadError.value = message(e) }
+  finally { downloadingFiles.value = false }
+}
 let fileRequestId = 0
 const deletingPath = ref('')
 const previewPath = ref('')
@@ -282,6 +310,7 @@ async function submitUpload() {
 async function loadFiles(page = filePage.value) {
   const repo = filesRepo.value
   if (!repo) return
+  if (page === filePage.value) selectedFiles.value = []
   const requestId = ++fileRequestId
   fileLoading.value = true
   fileError.value = ''
@@ -505,21 +534,24 @@ onMounted(() => { void load() })
             <div class="crp-view-switch" role="group" aria-label="仓库文件视图"><button type="button" :aria-pressed="fileView === 'directory'" data-testid="code-repo-directory-view" @click="switchFileView('directory')"><el-icon><Folder /></el-icon>目录</button><button type="button" :aria-pressed="fileView === 'paths'" data-testid="code-repo-paths-view" @click="switchFileView('paths')"><el-icon><List /></el-icon>路径列表</button></div>
             <el-input v-model="fileKeyword" clearable placeholder="按文件路径搜索" class="crp-file-search" data-testid="code-repo-files-keyword" @keyup.enter="loadFiles(1)" />
             <el-button :loading="fileLoading" data-testid="code-repo-files-search" @click="loadFiles(1)">查询</el-button>
+            <el-button :disabled="!selectedFiles.length || fileLoading || downloadingFiles" :loading="downloadingFiles" data-testid="code-repo-download-selected" @click="downloadSelectedFiles">下载所选{{ selectedFiles.length ? `（${selectedFiles.length}）` : '' }}</el-button>
           </div>
           <nav v-if="fileView === 'directory'" class="crp-breadcrumb" aria-label="当前仓库目录"><button type="button" @click="openFolder('')">{{ selectedDirectory?.name || '仓库根目录' }}</button><template v-for="crumb in folderCrumbs" :key="crumb.path"><span>/</span><button type="button" @click="openFolder(crumb.path)">{{ crumb.name }}</button></template></nav>
           <p v-if="fileError" class="crp-error" role="alert">{{ fileError }}</p>
+          <p v-if="downloadError" class="crp-error" role="alert" data-testid="code-repo-download-error">下载失败：{{ downloadError }}</p>
           <div class="crp-file-scroll">
             <table class="rc-data-table crp-files-table">
-              <thead><tr><th>{{ fileView === 'directory' ? '名称' : '文件路径' }}</th><th class="crp-file-time" :aria-sort="fileSort === 'updated-desc' ? 'descending' : 'ascending'" title="最后一次 Git 提交时间，按北京时间展示"><button type="button" class="crp-sort-button" data-testid="code-repo-time-sort" :disabled="fileLoading" :aria-label="fileSort === 'updated-desc' ? '按更新时间从旧到新排序' : '按更新时间从新到旧排序'" @click="toggleFileSort">更新时间 {{ fileSort === 'updated-desc' ? '↓' : '↑' }}</button></th><th>大小</th><th>类型</th><th>操作</th></tr></thead>
+              <thead><tr><th class="crp-file-checkbox"><input type="checkbox" aria-label="全选本页文件" data-testid="code-repo-download-select-page" :checked="allPageFilesSelected" :indeterminate="somePageFilesSelected && !allPageFilesSelected" :disabled="!pageFiles.length || fileLoading || downloadingFiles" @change="selectPageFiles(($event.target as HTMLInputElement).checked)" /></th><th>{{ fileView === 'directory' ? '名称' : '文件路径' }}</th><th class="crp-file-time" :aria-sort="fileSort === 'updated-desc' ? 'descending' : 'ascending'" title="最后一次 Git 提交时间，按北京时间展示"><button type="button" class="crp-sort-button" data-testid="code-repo-time-sort" :disabled="fileLoading" :aria-label="fileSort === 'updated-desc' ? '按更新时间从旧到新排序' : '按更新时间从新到旧排序'" @click="toggleFileSort">更新时间 {{ fileSort === 'updated-desc' ? '↓' : '↑' }}</button></th><th>大小</th><th>类型</th><th>操作</th></tr></thead>
               <tbody>
                 <tr v-for="row in fileRows" :key="row.path" class="crp-file-row" :class="{ 'crp-file-selected': previewPath === row.path }" :data-testid="`code-repo-file-${row.path}`" @click="openFileRow(row)">
+                  <td class="crp-file-checkbox" @click.stop><input v-if="row.kind !== 'directory'" type="checkbox" :aria-label="`选择文件 ${row.path}`" :checked="selectedFiles.includes(row.path)" :disabled="fileLoading || downloadingFiles" @change="selectDownloadFile(row.path, ($event.target as HTMLInputElement).checked)" /></td>
                   <td class="crp-file-path" :title="row.path"><button type="button" class="crp-file-link" :data-testid="`code-repo-preview-${row.path}`" @click.stop="openFileRow(row)"><el-icon v-if="fileView === 'directory'" :class="{ 'crp-folder-icon': row.kind === 'directory' }"><Folder v-if="row.kind === 'directory'" /><Document v-else /></el-icon>{{ fileView === 'directory' ? row.path.split('/').at(-1) : row.path }}</button></td>
                   <td class="crp-file-time" :title="row.updatedAt ? `最后提交：${formatRunnerDateTime(row.updatedAt)}` : '暂无 Git 提交时间'">{{ formatRunnerDateTime(row.updatedAt, '—') }}</td>
                   <td>{{ row.size === null ? '—' : `${row.size} B` }}</td>
                   <td>{{ row.kind === 'directory' ? '文件夹' : row.managed ? '流程代码' : '普通文件' }}</td>
                   <td><el-button v-if="row.kind === 'directory'" link type="primary" @click.stop="openFileRow(row)">打开</el-button><template v-else><el-button link type="primary" :data-testid="`code-repo-references-${row.path}`" @click.stop="referencesDrawer?.open(filesRepo!.repoId, row.path)">查看引用</el-button><el-button v-if="canWrite && row.canDelete" link type="danger" :loading="deletingPath === row.path" :data-testid="`code-repo-delete-${row.path}`" @click.stop="deleteFile(row)">删除</el-button><span v-else class="crp-muted" :title="row.deleteReason">{{ row.deleteReason ? '仍有关联' : row.managed ? '受保护' : '不可删除' }}</span></template></td>
                 </tr>
-                <tr v-if="!fileLoading && !fileRows.length"><td colspan="5">暂无匹配文件</td></tr>
+                <tr v-if="!fileLoading && !fileRows.length"><td colspan="6">暂无匹配文件</td></tr>
               </tbody>
             </table>
           </div>
@@ -596,5 +628,8 @@ onMounted(() => { void load() })
 .crp-upload-list ul { max-height: 190px; overflow: auto; margin: 6px 0 0; padding-left: 20px; line-height: 1.7; }
 .crp-files-toolbar, .crp-files-pager { display: flex; align-items: center; gap: 8px; }.crp-files-toolbar b { margin-right: auto; font-size: 12px; }.crp-files-pager span, .crp-muted { color: var(--rc-muted); font-size: 12px; }.crp-files-pager span { margin-right: auto; }
 .crp-files-table { width: 100%; }.crp-file-path { max-width: 460px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crp-file-checkbox { width: 32px; text-align: center; }
+.crp-file-checkbox input { accent-color: var(--el-color-primary); cursor: pointer; }
+.crp-files-toolbar { flex-wrap: wrap; }
 @media (max-width: 1100px) { .crp-head { flex-wrap: wrap; }.crp-head-spacer { display: none; } }
 </style>

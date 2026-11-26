@@ -289,6 +289,8 @@ class Runner:
         if manifest.get('executionSchema') != 2:
             env["NEWS_NOURL_QUEUE"] = assignment["queue"]
         env["RUNNER_MANAGEMENT_URL"] = self.server
+        # Override inherited values so multiple Runner instances never share an ID.
+        env["RUNNER_ID"] = self.identity["runnerId"]
         env["RUNNER_WORKER_TOKEN"] = assignment.get("workerToken", "")
         env["RUNNER_PUBLIC_KEY"] = self.identity["publicKey"]
         env["RUNNER_SCRIPT_CACHE"] = str(self.directory / "code")
