@@ -548,12 +548,13 @@ describe('flow store 新建 / 校验（M5.5）', () => {
   })
 
   // 0711 R9：URL 参数校验（同步、不查参数库）
-  it('validateFlow：普通网页抓取的 URL 参数写在 # 片段里时报错，提示改用浏览器抓取', () => {
+  // 2026-11-26：186 上网页抓取 [90] 的任务实际按「浏览器抓取」执行（typeId 200），能读 # 片段，不再报错
+  it('validateFlow：网页抓取节点 URL 参数写在 # 片段里不报错', () => {
     f.newFlow('blank')
     const id = f.insertAfter('start', 'web')
-    f.patchCollect(id, { url: 'https://x.com/a#p=$PARAM$_1036', outputTable: 't1' })
+    f.patchCollect(id, { url: 'https://x.com/a#p=$PARAM$_1036', outputTable: 't1', urlParamRefs: ['1036'], urlParamValues: { '1036': 'SUV' } })
     const errs = f.validateFlow()
-    expect(errs.some((e) => e.includes('#') && e.includes('浏览器抓取'))).toBe(true)
+    expect(errs.some((e) => e.includes('片段'))).toBe(false)
   })
 
   it('validateFlow：浏览器抓取节点的 fragment 参数不报错（能读 fragment）', () => {

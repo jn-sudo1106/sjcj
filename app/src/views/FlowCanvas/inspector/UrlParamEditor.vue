@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { configApi, paramApi, type Param } from '@/api'
-import { expandParameterizedUrl, extractUrlParamIds, hasFragmentParams } from '@/utils/flow/urlParams'
+import { expandParameterizedUrl, extractUrlParamIds } from '@/utils/flow/urlParams'
 import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
 
 const props = defineProps<{
@@ -10,7 +10,6 @@ const props = defineProps<{
   url: string
   paramRefs?: string[]
   paramValues: Record<string, string>
-  warnFragment?: boolean
   /** 本节点引用的配置 ID。给了就把绑定/解绑接到真实接口（config/configParamAdd|Del，
    *  2026-08-26 拍板放开生产写）；不给（新建节点还没有配置）则退回只改本地。 */
   configId?: string
@@ -29,7 +28,6 @@ const drawer = reactive<{ visible: boolean; param: Param | null }>({ visible: fa
 
 const refs = computed(() => [...new Set(props.paramRefs ?? [])])
 const tokenIds = computed(() => extractUrlParamIds(props.url))
-const fragmentWarning = computed(() => !!props.warnFragment && hasFragmentParams(props.url))
 
 async function loadAvailable() {
   available.value = (await paramApi.paramPaged({ size: 100 })).list
@@ -223,7 +221,6 @@ function kindLabel(kind: Param['kind']) {
         <button v-if="!props.templateDefaults" class="rc-btn" type="button" @click="openCreate">＋ 新建参数</button>
       </div>
       <div v-if="unboundTokenIds.length" class="upe-warn" data-testid="url-param-unbound">URL 中的参数 {{ unboundTokenIds.join('、') }} 尚未绑定到配置{{ props.configId ? ` #${props.configId}` : '' }}，发起抓取时不会带参数值。{{ notOnConfigIds.length ? '请点下方参数的「绑定到配置」' : `请从上方选择已有参数${props.templateDefaults ? '' : '或新建参数'}` }}。</div>
-      <div v-if="fragmentWarning" class="upe-warn">参数写在 URL 的 # 片段里，普通网页抓取（HTTP 请求）读不到，请改用“浏览器抓取”节点。</div>
       <div v-if="!refs.length" class="upe-empty">暂无参数配置</div>
       <div v-for="id in refs" :key="id" class="upe-row">
         <div v-if="loading[id]" class="upe-row-head"><span class="upe-id">{{ id }}</span><span class="muted">查询中…</span></div>

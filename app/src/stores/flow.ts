@@ -45,7 +45,7 @@ import {
   type RuleOrchestration,
   applyStepDetails as applyStepDetailsToConfigs,
 } from '@/views/FlowCanvas/canvas/flowModel'
-import { extractUrlParamIds, hasFragmentParams } from '@/utils/flow/urlParams'
+import { extractUrlParamIds } from '@/utils/flow/urlParams'
 import {
   composeTemplateFlow,
   extractTemplateNodeBindings,
@@ -987,9 +987,8 @@ export const useFlowStore = defineStore('flow', () => {
               errs.push(`「${c.title}」请选择一个启用的默认登录配置`)
             }
           }
-        if (capability?.kind === 'web' && hasFragmentParams(c.collectCfg.url)) {
-          errs.push(`「${c.title}」URL 参数写在 # 片段里，普通网页抓取读不到，请改用浏览器抓取节点`)
-        }
+        // 2026-11-26 删「# 片段里的参数普通网页抓取读不到」：186 实测网页抓取 [90] 配置发出的任务一律是
+        // 「浏览器抓取」（typeId 200，dev_web_snatch_* 队列），由浏览器执行、能读到 # 片段，这条前提不成立。
         const paramIds = extractUrlParamIds(c.collectCfg.url)
         const refs = c.collectCfg.urlParamRefs ?? []
         const unbound = paramIds.filter((pid) => !refs.includes(pid))

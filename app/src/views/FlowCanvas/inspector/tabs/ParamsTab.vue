@@ -41,7 +41,6 @@ const isFirstCollectorNode = computed(() => !!cc.value && flow.main.find((nodeId
       :config-id="cfg?.configId"
       :param-refs="cc.urlParamRefs ?? []"
       :param-values="cc.urlParamValues ?? {}"
-      :warn-fragment="nodeCapability?.kind === 'web'"
       @update:param-refs="onUrlParamRefsChange"
       @update:param-values="onUrlParamValuesChange"
     />

@@ -19,6 +19,14 @@ describe('UrlParamEditor', () => {
     expect(wrapper.text()).toContain('暂无参数配置')
   })
 
+  it('URL 参数写在 # 片段里不再提示改用浏览器抓取（1126：网页抓取 [90] 实际按浏览器执行）', () => {
+    const wrapper = mount(UrlParamEditor, {
+      props: { url: 'https://basic.10jqka.com.cn/600519/event.html#code=$PARAM$_791000', paramRefs: [], paramValues: {} },
+      global: { stubs: { 'el-drawer': { template: '<div><slot /><slot name="footer" /></div>' } } },
+    })
+    expect(wrapper.text()).not.toContain('片段')
+  })
+
   it('已绑定参数会直接显示在展开内容中', () => {
     const wrapper = mount(UrlParamEditor, {
       props: {
