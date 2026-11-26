@@ -154,7 +154,9 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     const url = String(open.mock.calls[1]?.[0])
     expect(url).toContain('/entry/entryExportAll?')
     expect(new URL(url, 'http://x').searchParams.get('sourceId')).toBe('391007768')
-    expect(new URL(url, 'http://x').searchParams.has('more')).toBe(false)
+    // 2026-11-25 导出修复（86a2e81c）：没有筛选条件时也要带恒真 more，否则后端只查必填列，
+    // 导出的业务列全是空的（用户报的「导出 excel 是空白」）。这里同步成新口径。
+    expect(new URL(url, 'http://x').searchParams.get('more')).toBe('1 = 1')
     expect(open.mock.calls[1]?.[1]).toBe('_blank')
   })
 
@@ -1195,6 +1197,19 @@ describe('SiteDataView · 哪些列可排', () => {
     const { wrapper } = await mountRich()
     expect(headOf(wrapper, '发布时间-K3')?.classes()).not.toContain('dg-sortable')
     expect(headOf(wrapper, '标题-K1')?.classes()).not.toContain('dg-sortable')
+  })
+
+  // 2026-11-26 用户反馈「排序没生效」：点更新时间毫无反应——日期列当初被一刀切挡在白名单外，
+  // 但 UPDATE_DT/CREATE_DT 是真正的 datetime 列，后端不加 (+ 0)，可以直接 ORDER BY。
+  it('更新时间 / 创建时间可排：发给后端的是物理列名，不加 (+ 0)', async () => {
+    const { wrapper, query } = await mountRich()
+    expect(headOf(wrapper, '更新时间')?.classes()).toContain('dg-sortable')
+    expect(headOf(wrapper, '创建时间')?.classes()).toContain('dg-sortable')
+
+    await headOf(wrapper, '更新时间')!.trigger('click')
+    await flushPromises()
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sortField: 'UPDATE_DT', sortOrder: 'ascend' }))
+    expect(wrapper.findComponent(DataGrid).props('sortField')).toBe('UPDATE_DT')
   })
 
   it('点正文大小列头：发给后端与归并用的都是物理列名 K7', async () => {

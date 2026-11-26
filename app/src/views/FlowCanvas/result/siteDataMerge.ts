@@ -41,26 +41,43 @@ export function initMergeState<T extends MergeRow = DataRow>(sourceIds: string[]
  * 所以 parseFloat 而不是 Number：MySQL 的 `'12abc' + 0` 得 12、`'abc' + 0` 得 0，
  * parseFloat 的行为与之对应，Number('12abc') 却是 NaN。
  *
- * 也正因为只能数值化比较，**可排序的列必须是纯数字列**。文本列排出来全是 0，
- * 日期列如 '2025-07-30' 会退化成按年份排——看着像排好了其实是错的，
+ * 也正因为只能数值化比较，**业务列里只有纯数字列能排**。文本列排出来全是 0，
+ * K 列里的日期如 '2025-07-30' 会退化成按年份排——看着像排好了其实是错的，
  * 这类列不能进白名单（见 SiteDataView 的 SORTABLE_PROPS）。
+ *
+ * 例外是真正的日期列（UPDATE_DT / CREATE_DT）：后端对它们**不加 (+ 0)**，直接
+ * `ORDER BY UPDATE_DT DESC`，所以这里也按字符串比。格式是 'YYYY-MM-DD HH:mm:ss'，
+ * 字典序就是时间序，空值当空串（降序时自然垫底）。
  */
-function mergeKey<T extends MergeRow>(row: T, field: string): number {
+/** 后端按物理列名直接排序、不做数值化的列（见 api/index.ts 的 isTimeField）。 */
+const DATE_FIELDS = new Set(['UPDATE_DT', 'CREATE_DT'])
+
+function mergeKey<T extends MergeRow>(row: T, field: string): number | string {
   if (field === 'ENTRY_ID') {
     const n = Number(row.dataId)
     return Number.isFinite(n) ? n : 0
   }
-  const n = parseFloat(String(row.values?.[field] ?? ''))
+  const raw = String(row.values?.[field] ?? '').trim()
+  if (DATE_FIELDS.has(field)) return raw
+  const n = parseFloat(raw)
   return Number.isFinite(n) ? n : 0
+}
+
+/** 日期按字符串比、数字按大小比；两侧类型一致（同一个 field 取出来的键不会混型）。 */
+function compareKeys(a: number | string, b: number | string): number {
+  if (typeof a === 'string' || typeof b === 'string') {
+    const sa = String(a)
+    const sb = String(b)
+    return sa === sb ? 0 : (sa < sb ? -1 : 1)
+  }
+  return a - b
 }
 
 /** 归并方向。只有这一个维度可调——归并键固定是 dataId(ENTRY_ID)，见本文件顶部说明。 */
 export type MergeOrder = 'ascend' | 'descend'
 
 function sortRows<T extends MergeRow>(rows: T[], order: MergeOrder, field: string): T[] {
-  return [...rows].sort((a, b) => (order === 'ascend'
-    ? mergeKey(a, field) - mergeKey(b, field)
-    : mergeKey(b, field) - mergeKey(a, field)))
+  return [...rows].sort((a, b) => compareKeys(mergeKey(a, field), mergeKey(b, field)) * (order === 'ascend' ? 1 : -1))
 }
 
 export type FetchPage<T extends MergeRow = DataRow> = (sourceId: string, page: number, size: number) => Promise<T[]>
@@ -96,9 +113,9 @@ function popNext<T extends MergeRow>(states: MergeSourceState<T>[], order: Merge
   for (const s of states) {
     if (!s.buffer.length) continue
     if (!best) { best = s; continue }
-    const ahead = order === 'ascend'
-      ? mergeKey(s.buffer[0], field) < mergeKey(best.buffer[0], field)
-      : mergeKey(s.buffer[0], field) > mergeKey(best.buffer[0], field)
+    // 降序取最大、升序取最小：compareKeys(<0 表示 s 在前)
+    const cmp = compareKeys(mergeKey(s.buffer[0], field), mergeKey(best.buffer[0], field))
+    const ahead = order === 'ascend' ? cmp < 0 : cmp > 0
     if (ahead) best = s
   }
   return best ? (best.buffer.shift() ?? null) : null

@@ -220,3 +220,27 @@ describe('mergeLoadMore · 归并方向', () => {
     expect(r.allExhausted).toBe(true)
   })
 })
+
+// 2026-11-26：日期列（UPDATE_DT/CREATE_DT）后端不加 (+ 0)，归并键必须按字符串比，
+// 否则 '2026-11-26 10:00:00' 用 parseFloat 全是 2026，归并结果等于没排。
+describe('siteDataMerge · 日期列排序', () => {
+  const dated = (id: string, dt: string) => ({ dataId: id, sourceId: 'a', title: id, summary: '', acceptState: 'pending', values: { UPDATE_DT: dt } }) as unknown as DataRow
+
+  it('降序：按时间字符串从新到旧，空值垫底', async () => {
+    const pages: Record<string, DataRow[][]> = {
+      a: [[dated('1', '2026-11-01 08:00:00'), dated('2', '')]],
+      b: [[dated('3', '2026-11-20 23:59:59'), dated('4', '2026-11-05 12:00:00')]],
+    }
+    const result = await mergeLoadMore(initMergeState(['a', 'b']), 4, 2,
+      async (sourceId, page) => pages[sourceId][page - 1] ?? [],
+      { order: 'descend', sortField: 'UPDATE_DT' })
+    expect(result.rows.map((r) => r.dataId)).toEqual(['3', '4', '1', '2'])
+  })
+
+  it('升序：空值排最前', async () => {
+    const result = await mergeLoadMore(initMergeState(['a']), 2, 2,
+      async () => [dated('1', '2026-11-01 08:00:00'), dated('2', '')],
+      { order: 'ascend', sortField: 'UPDATE_DT' })
+    expect(result.rows.map((r) => r.dataId)).toEqual(['2', '1'])
+  })
+})
