@@ -91,6 +91,11 @@ export interface SyncFileRecord {
   uploadEndTime?: string; targetUrl?: string; createTime?: string; updateTime?: string
   remark?: string; delFlag?: number
 }
+export interface SyncSnapshotLog {
+  id: Id; clientId?: Id; taskId?: Id; taskName?: string; sourceCode?: string
+  totalNum?: number; params?: string; fileName?: string; status?: number
+  remark?: string; createTime?: string; updateTime?: string; delFlag?: number
+}
 
 // ---- SQL 执行 / 建表任务（1008-10，接口文档《SQL执行与建表任务管理接口文档》第二版）----
 /** 数据同步状态枚举：0 待执行 / 1 可执行 / 2 执行中 / 3 执行完成 / 5 执行异常 */
@@ -157,6 +162,7 @@ export const syncApi = {
   logs: (params: Record<string, unknown>) => call<SyncPage<SyncLog>>('/task-log/log-page', 'POST', params),
   statistics: (params: Record<string, unknown>) => call<SyncPage<SyncStatistic>>('/task-log/statistic-page', 'POST', params),
   fileLogs: (params: Record<string, unknown>) => call<SyncPage<SyncFileRecord>>('/task-log/file-record-log-page', 'POST', params),
+  snapshotLogs: (params: Record<string, unknown>) => call<SyncPage<SyncSnapshotLog>>('/task-log/snapshot-log-page', 'POST', params),
   taskChoices: (params: Record<string, unknown>) => callList<SyncTask>('/task-overview/list', params),
   // ---- SQL 执行 / 建表任务（1008-10）----
   // add 类响应标量 data 是新增记录 id：normalizeHttpPayload 会把它放在返回的 data 字段（见 client.ts）

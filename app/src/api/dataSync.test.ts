@@ -56,6 +56,24 @@ describe('旧数据同步契约', () => {
     expect(JSON.parse(fetchSpy.mock.calls[2]?.[1].body)).toEqual({ pageNo: 1, pageSize: 10, clientId: 5 })
   })
 
+  it('文件快照表分页请求契约正确', async () => {
+    const fetchSpy = vi.fn().mockResolvedValueOnce(
+      response([{ id: 40, taskId: 12, fileName: 'task_12_1_0.dat', totalNum: 1000, status: 4 }], 1),
+    )
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const res = await syncApi.snapshotLogs({ pageNo: 1, pageSize: 10, clientId: 5, status: '4' })
+    expect(res).toEqual({
+      list: [{ id: 40, taskId: 12, fileName: 'task_12_1_0.dat', totalNum: 1000, status: 4 }],
+      total: 1,
+    })
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('/api/sync-platform/task-log/snapshot-log-page')
+    expect(fetchSpy.mock.calls[0]?.[1].method).toBe('POST')
+    expect(JSON.parse(fetchSpy.mock.calls[0]?.[1].body)).toEqual({
+      pageNo: 1, pageSize: 10, clientId: 5, status: '4',
+    })
+  })
+
   it('非分页列表带 count:null 时仍返回数组（同步服务真实响应形状）', async () => {
     const list = [{ entryTypeId: 900, tableName: 'sense_data.TB_CNEWS', typeName: '新闻' }]
     const fetchSpy = vi.fn().mockImplementation(async () => response(list, null as unknown as number))

@@ -40,9 +40,26 @@ async function mountTab() {
     }],
     total: 1,
   })
+  const snapshotLogs = vi.spyOn(syncApi, 'snapshotLogs').mockResolvedValue({
+    list: [{
+      id: 201,
+      clientId: 10,
+      taskId: 88,
+      taskName: '行情快照任务',
+      sourceCode: 'src_mysql',
+      totalNum: 100000,
+      params: '{"batchId":1732600000,"shardIndex":0,"startId":1,"endId":100000}',
+      fileName: 'task_88_1732600000_0.dat',
+      status: 4,
+      createTime: '2026-11-26 10:00:00',
+      updateTime: '2026-11-26 10:01:00',
+      remark: '分片同步完成',
+    }],
+    total: 1,
+  })
   wrapper = mount(LogsTab, { attachTo: document.body, global: { plugins: [ElementPlus] } })
   await flushPromises()
-  return { clients, logs, stats, fileLogs }
+  return { clients, logs, stats, fileLogs, snapshotLogs }
 }
 
 afterEach(() => {
@@ -78,10 +95,10 @@ describe('LogsTab · 筛选栏', () => {
     expect(clients).toHaveBeenCalledWith({ pageNo: 1, pageSize: 500 })
   })
 
-  it('展示「任务日志」「统计日志」「文件同步列表」三个页签，切换到文件同步列表使用相同筛选条件', async () => {
+  it('展示「任务日志」「统计日志」「文件同步列表」「文件快照表」四个页签，切换到文件同步列表使用相同筛选条件', async () => {
     const { fileLogs } = await mountTab()
     const tabPanes = wrapper!.findAll('.el-tabs__item')
-    expect(tabPanes.map((t) => t.text())).toEqual(['任务日志', '统计日志', '文件同步列表'])
+    expect(tabPanes.map((t) => t.text())).toEqual(['任务日志', '统计日志', '文件同步列表', '文件快照表'])
 
     // 点击「文件同步列表」
     await tabPanes[2].trigger('click')
@@ -136,5 +153,62 @@ describe('LogsTab · 筛选栏', () => {
     expect(wrapper!.text()).toContain('oss://bucket/contract_01.pdf')
     expect(wrapper!.text()).toContain('src_mysql')
     expect(wrapper!.text()).toContain('oss_target')
+  })
+
+  it('切换到「文件快照表」使用快照状态与快照文件名筛选并可查看详情', async () => {
+    const { snapshotLogs } = await mountTab()
+    const tabPanes = wrapper!.findAll('.el-tabs__item')
+
+    await tabPanes[3].trigger('click')
+    await flushPromises()
+
+    const inputsAfter = wrapper!.findAllComponents(ElInput).filter((item) => item.classes('sync-input'))
+    expect(inputsAfter).toHaveLength(1)
+    expect(inputsAfter[0].props('placeholder')).toBe('快照文件名')
+
+    const statusSelect = wrapper!.findAllComponents(ElSelect).filter((item) => item.classes('sync-input'))[3]
+    const statusLabels = statusSelect.findAllComponents(ElOption).map((o) => String(o.props('label')))
+    expect(statusLabels).toEqual(['未开始', '文件生成中', '文件生成完成', '文件同步中', '文件同步完成', '异常'])
+
+    expect(snapshotLogs).toHaveBeenCalledTimes(1)
+    const firstCall = snapshotLogs.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(firstCall).toMatchObject({
+      customerId: '',
+      clientId: '',
+      schemaName: '',
+      sourceTable: '',
+      fileName: '',
+      taskIdSet: [],
+      status: '',
+      type: '',
+      pageNo: 1,
+      pageSize: 10,
+    })
+
+    inputsAfter[0].vm.$emit('update:modelValue', 'task_88')
+    await flushPromises()
+    const searchBtn = wrapper!.findAll('.sync-filter-actions .el-button')[0]
+    await searchBtn.trigger('click')
+    await flushPromises()
+
+    const latestCall = snapshotLogs.mock.calls[snapshotLogs.mock.calls.length - 1]?.[0] as Record<string, unknown>
+    expect(latestCall.fileName).toBe('task_88')
+    expect(latestCall.schemaName).toBe('')
+    expect(latestCall.sourceTable).toBe('')
+
+    expect(wrapper!.text()).toContain('task_88_1732600000_0.dat')
+    expect(wrapper!.text()).toContain('行情快照任务')
+    expect(wrapper!.text()).toContain('src_mysql')
+    expect(wrapper!.text()).toContain('100000')
+    expect(wrapper!.text()).toContain('文件同步完成')
+
+    const detailBtn = wrapper!.find('[data-testid="snapshot-detail"]')
+    expect(detailBtn.exists()).toBe(true)
+    await detailBtn.trigger('click')
+    await flushPromises()
+
+    expect(wrapper!.text()).toContain('文件快照详情')
+    expect(wrapper!.text()).toContain('分片参数')
+    expect(wrapper!.text()).toContain('"shardIndex": 0')
   })
 })

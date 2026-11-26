@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { View } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
-import { syncApi, type SyncClient, type SyncCustomer, type SyncFileRecord, type SyncLog, type SyncStatistic, type SyncTask } from '@/api/dataSync'
+import { syncApi, type SyncClient, type SyncCustomer, type SyncFileRecord, type SyncLog, type SyncSnapshotLog, type SyncStatistic, type SyncTask } from '@/api/dataSync'
 
 const auth = useAuthStore()
 const admin = computed(() => auth.info?.name === 'admin')
@@ -13,12 +13,13 @@ const taskChoices = ref<SyncTask[]>([])
 const logs = ref<SyncLog[]>([])
 const stats = ref<SyncStatistic[]>([])
 const fileLogs = ref<SyncFileRecord[]>([])
+const snapshotLogs = ref<SyncSnapshotLog[]>([])
 const total = ref(0)
 const pageNo = ref(1)
 const pageSize = ref(10)
 // 客户端候选与名称映射一次取全的量（日志分页只 10 条，候选反而需要更大的范围）
 const CLIENT_MAP_SIZE = 500
-const active = ref<'logs' | 'stats' | 'files'>('logs')
+const active = ref<'logs' | 'stats' | 'files' | 'snapshots'>('logs')
 const loading = ref(false)
 const loadError = ref('')
 // 默认查当天（10-12 优化）：开始 00:00:00 ~ 结束 23:59:59，与数据查看页时间范围口径一致
@@ -29,20 +30,44 @@ function todayRange(): { startTime: string; endTime: string } {
 }
 function defaultFilter() {
   return { customerId: admin.value ? '' : String(auth.info?.id ?? ''), clientId: '', schemaName: '',
-    sourceTable: '', taskIdSet: [] as Array<string | number>, status: '', type: '', ...todayRange() }
+    sourceTable: '', fileName: '', taskIdSet: [] as Array<string | number>, status: '', type: '', ...todayRange() }
 }
 const filter = reactive(defaultFilter())
 const detail = ref<SyncStatistic | null>(null)
 const detailOpen = ref(false)
 const fileDetail = ref<SyncFileRecord | null>(null)
 const fileDetailOpen = ref(false)
+const snapshotDetail = ref<SyncSnapshotLog | null>(null)
+const snapshotDetailOpen = ref(false)
+
+const statusOptions = computed(() => (
+  active.value === 'snapshots'
+    ? [
+        { value: '0', label: '未开始' },
+        { value: '1', label: '文件生成中' },
+        { value: '2', label: '文件生成完成' },
+        { value: '3', label: '文件同步中' },
+        { value: '4', label: '文件同步完成' },
+        { value: '5', label: '异常' },
+      ]
+    : [
+        { value: '2', label: '运行中' },
+        { value: '3', label: '运行完成' },
+        { value: '5', label: '运行异常' },
+      ]
+))
 
 function params() {
-  const p = { ...filter, pageNo: pageNo.value, pageSize: pageSize.value }
+  const p: Record<string, unknown> = { ...filter, pageNo: pageNo.value, pageSize: pageSize.value }
   if (active.value === 'files') {
     p.schemaName = ''
+    delete p.fileName
+  } else if (active.value === 'snapshots') {
+    p.schemaName = ''
+    p.sourceTable = ''
   } else {
     p.sourceTable = ''
+    delete p.fileName
   }
   return p
 }
@@ -53,11 +78,13 @@ async function load() {
       const res = await syncApi.logs(params()); logs.value = res.list ?? []; total.value = res.total ?? 0
     } else if (active.value === 'stats') {
       const res = await syncApi.statistics(params()); stats.value = res.list ?? []; total.value = res.total ?? 0
-    } else {
+    } else if (active.value === 'files') {
       const res = await syncApi.fileLogs(params()); fileLogs.value = res.list ?? []; total.value = res.total ?? 0
+    } else {
+      const res = await syncApi.snapshotLogs(params()); snapshotLogs.value = res.list ?? []; total.value = res.total ?? 0
     }
     loadError.value = ''
-  } catch (error) { loadError.value = String(error); logs.value = []; stats.value = []; fileLogs.value = []; total.value = 0; ElMessage.error(loadError.value) }
+  } catch (error) { loadError.value = String(error); logs.value = []; stats.value = []; fileLogs.value = []; snapshotLogs.value = []; total.value = 0; ElMessage.error(loadError.value) }
   finally { loading.value = false }
 }
 
@@ -82,7 +109,12 @@ function reset() {
   search()
 }
 watch(() => filter.customerId, () => { void loadClients(); search() })
-watch(active, search)
+watch(active, (next, prev) => {
+  if ((next === 'snapshots') !== (prev === 'snapshots')) {
+    filter.status = ''
+  }
+  search()
+})
 onMounted(async () => {
   if (admin.value) {
     try { customers.value = await syncApi.customers() ?? [] }
@@ -145,6 +177,35 @@ function fileDuration(row: SyncFileRecord) {
   if (!Number.isFinite(seconds)) return '-'
   return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`
 }
+
+function snapshotStatusLabel(row: SyncSnapshotLog) {
+  const map: Record<number, string> = {
+    0: '未开始',
+    1: '文件生成中',
+    2: '文件生成完成',
+    3: '文件同步中',
+    4: '文件同步完成',
+    5: '异常',
+  }
+  return row.status !== undefined && map[row.status] ? map[row.status] : '未知'
+}
+
+function snapshotStatusTagType(row: SyncSnapshotLog): 'primary' | 'success' | 'warning' | 'danger' | 'info' {
+  if (row.status === 4) return 'success'
+  if (row.status === 5) return 'danger'
+  if (row.status === 1 || row.status === 3) return 'warning'
+  if (row.status === 2) return 'primary'
+  return 'info'
+}
+
+function formatSnapshotParams(raw?: string) {
+  if (!raw) return '-'
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2)
+  } catch {
+    return raw
+  }
+}
 </script>
 
 <template>
@@ -154,9 +215,10 @@ function fileDuration(row: SyncFileRecord) {
       <el-select v-if="admin" v-model="filter.customerId" clearable placeholder="全部客户" class="sync-input"><el-option v-for="item in customers" :key="item.id" :value="String(item.id)" :label="item.customerName" /></el-select>
       <el-select v-model="filter.clientId" clearable placeholder="全部客户端" class="sync-input" @clear="search"><el-option v-for="item in clients" :key="item.id" :value="String(item.id)" :label="item.clientName" /></el-select>
       <el-input v-if="active === 'files'" v-model="filter.sourceTable" clearable placeholder="源表" class="sync-input" @keyup.enter="search" @clear="search" />
+      <el-input v-else-if="active === 'snapshots'" v-model="filter.fileName" clearable placeholder="快照文件名" class="sync-input" @keyup.enter="search" @clear="search" />
       <el-input v-else v-model="filter.schemaName" clearable placeholder="DB 名称" class="sync-input" @keyup.enter="search" @clear="search" />
       <el-select v-model="filter.taskIdSet" multiple filterable remote clearable :remote-method="searchTasks" placeholder="任务名称" class="sync-input wide" @clear="search"><el-option v-for="item in taskChoices" :key="item.id" :value="item.id" :label="item.taskName" /></el-select>
-      <el-select v-model="filter.status" clearable placeholder="全部状态" class="sync-input" @clear="search"><el-option value="2" label="运行中" /><el-option value="3" label="运行完成" /><el-option value="5" label="运行异常" /></el-select>
+      <el-select v-model="filter.status" clearable placeholder="全部状态" class="sync-input" @clear="search"><el-option v-for="opt in statusOptions" :key="opt.value" :value="opt.value" :label="opt.label" /></el-select>
       <el-select v-model="filter.type" clearable placeholder="全部类型" class="sync-input" @clear="search"><el-option value="1" label="定时同步" /><el-option value="2" label="手动同步" /></el-select>
       <el-date-picker v-model="filter.startTime" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" placeholder="开始时间" class="sync-time" />
       <el-date-picker v-model="filter.endTime" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" placeholder="结束时间" class="sync-time" />
@@ -165,7 +227,7 @@ function fileDuration(row: SyncFileRecord) {
       </div>
     </div>
     <el-tabs v-model="active">
-      <el-tab-pane label="任务日志" name="logs" /><el-tab-pane label="统计日志" name="stats" /><el-tab-pane label="文件同步列表" name="files" />
+      <el-tab-pane label="任务日志" name="logs" /><el-tab-pane label="统计日志" name="stats" /><el-tab-pane label="文件同步列表" name="files" /><el-tab-pane label="文件快照表" name="snapshots" />
     </el-tabs>
     <el-table v-if="active === 'logs'" v-loading="loading" :data="logs" border>
       <el-table-column prop="id" label="ID" width="80" /><el-table-column prop="taskId" label="任务 ID" width="100" />
@@ -184,7 +246,7 @@ function fileDuration(row: SyncFileRecord) {
       <el-table-column prop="sourceSql" label="源表统计 SQL" min-width="220" show-overflow-tooltip /><el-table-column prop="targetSql" label="目标表统计 SQL" min-width="220" show-overflow-tooltip />
       <el-table-column prop="createTime" label="创建时间" width="170" /><el-table-column label="操作" width="60"><template #default="{ row }"><el-tooltip content="详情" placement="top"><span class="rc-op-icon" data-testid="log-detail" aria-label="详情" @click="detail = row; detailOpen = true"><el-icon :size="15"><View /></el-icon></span></el-tooltip></template></el-table-column>
     </el-table>
-    <el-table v-else v-loading="loading" :data="fileLogs" border>
+    <el-table v-else-if="active === 'files'" v-loading="loading" :data="fileLogs" border>
       <el-table-column prop="id" label="ID" width="80" />
       <el-table-column label="客户端" min-width="120" show-overflow-tooltip><template #default="{ row }">{{ clientName(row.clientId) }}</template></el-table-column>
       <el-table-column prop="fileName" label="文件名称" min-width="180" show-overflow-tooltip />
@@ -197,6 +259,20 @@ function fileDuration(row: SyncFileRecord) {
       <el-table-column prop="createTime" label="创建时间" width="170" />
       <el-table-column prop="remark" label="备注" min-width="180" show-overflow-tooltip />
       <el-table-column label="操作" width="60" fixed="right"><template #default="{ row }"><el-tooltip content="详情" placement="top"><span class="rc-op-icon" data-testid="file-detail" aria-label="详情" @click="fileDetail = row; fileDetailOpen = true"><el-icon :size="15"><View /></el-icon></span></el-tooltip></template></el-table-column>
+    </el-table>
+    <el-table v-else v-loading="loading" :data="snapshotLogs" border>
+      <el-table-column prop="id" label="ID" width="80" />
+      <el-table-column label="客户端" min-width="120" show-overflow-tooltip><template #default="{ row }">{{ clientName(row.clientId) }}</template></el-table-column>
+      <el-table-column prop="taskId" label="任务 ID" width="100" />
+      <el-table-column label="任务名称" min-width="160" show-overflow-tooltip><template #default="{ row }">{{ row.taskName || '-' }}</template></el-table-column>
+      <el-table-column prop="sourceCode" label="源编码" min-width="120" show-overflow-tooltip />
+      <el-table-column prop="fileName" label="快照文件名" min-width="220" show-overflow-tooltip />
+      <el-table-column prop="totalNum" label="数据行数" width="100" />
+      <el-table-column label="状态" width="120"><template #default="{ row }"><el-tag :type="snapshotStatusTagType(row)" size="small">{{ snapshotStatusLabel(row) }}</el-tag></template></el-table-column>
+      <el-table-column prop="createTime" label="创建时间" width="170" />
+      <el-table-column prop="updateTime" label="更新时间" width="170" />
+      <el-table-column prop="remark" label="备注" min-width="180" show-overflow-tooltip />
+      <el-table-column label="操作" width="60" fixed="right"><template #default="{ row }"><el-tooltip content="详情" placement="top"><span class="rc-op-icon" data-testid="snapshot-detail" aria-label="详情" @click="snapshotDetail = row; snapshotDetailOpen = true"><el-icon :size="15"><View /></el-icon></span></el-tooltip></template></el-table-column>
     </el-table>
     <el-pagination v-model:current-page="pageNo" v-model:page-size="pageSize" class="sync-pagination" :total="total" :page-sizes="[10, 20, 50]" layout="total, sizes, prev, pager, next" @change="load" />
     <el-drawer v-model="detailOpen" title="统计日志详情" size="min(650px, 94vw)"><el-descriptions v-if="detail" :column="1" border>
@@ -222,6 +298,20 @@ function fileDuration(row: SyncFileRecord) {
       <el-descriptions-item label="创建时间">{{ fileDetail.createTime || '-' }}</el-descriptions-item>
       <el-descriptions-item label="更新时间">{{ fileDetail.updateTime || '-' }}</el-descriptions-item>
       <el-descriptions-item label="备注"><pre>{{ fileDetail.remark || '-' }}</pre></el-descriptions-item>
+    </el-descriptions></el-drawer>
+    <el-drawer v-model="snapshotDetailOpen" title="文件快照详情" size="min(650px, 94vw)"><el-descriptions v-if="snapshotDetail" :column="1" border>
+      <el-descriptions-item label="ID">{{ snapshotDetail.id }}</el-descriptions-item>
+      <el-descriptions-item label="客户端">{{ clientName(snapshotDetail.clientId) }} (ID: {{ snapshotDetail.clientId }})</el-descriptions-item>
+      <el-descriptions-item label="任务 ID">{{ snapshotDetail.taskId ?? '-' }}</el-descriptions-item>
+      <el-descriptions-item label="任务名称">{{ snapshotDetail.taskName || '-' }}</el-descriptions-item>
+      <el-descriptions-item label="源编码">{{ snapshotDetail.sourceCode || '-' }}</el-descriptions-item>
+      <el-descriptions-item label="快照文件名"><pre>{{ snapshotDetail.fileName || '-' }}</pre></el-descriptions-item>
+      <el-descriptions-item label="数据行数">{{ snapshotDetail.totalNum ?? '-' }}</el-descriptions-item>
+      <el-descriptions-item label="状态"><el-tag :type="snapshotStatusTagType(snapshotDetail)" size="small">{{ snapshotStatusLabel(snapshotDetail) }}</el-tag></el-descriptions-item>
+      <el-descriptions-item label="分片参数"><pre>{{ formatSnapshotParams(snapshotDetail.params) }}</pre></el-descriptions-item>
+      <el-descriptions-item label="创建时间">{{ snapshotDetail.createTime || '-' }}</el-descriptions-item>
+      <el-descriptions-item label="更新时间">{{ snapshotDetail.updateTime || '-' }}</el-descriptions-item>
+      <el-descriptions-item label="备注"><pre>{{ snapshotDetail.remark || '-' }}</pre></el-descriptions-item>
     </el-descriptions></el-drawer>
   </div>
 </template>
