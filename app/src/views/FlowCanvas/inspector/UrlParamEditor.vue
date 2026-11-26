@@ -29,7 +29,6 @@ const drawer = reactive<{ visible: boolean; param: Param | null }>({ visible: fa
 
 const refs = computed(() => [...new Set(props.paramRefs ?? [])])
 const tokenIds = computed(() => extractUrlParamIds(props.url))
-const unboundTokenIds = computed(() => tokenIds.value.filter((id) => !refs.value.includes(id)))
 const fragmentWarning = computed(() => !!props.warnFragment && hasFragmentParams(props.url))
 
 async function loadAvailable() {
@@ -39,17 +38,50 @@ async function loadAvailable() {
 // paramId → 绑定记录 id（configParamDel 要的是绑定记录 id，不是 paramId）。
 // 每次绑定/解绑成功后重拉一次：用户可能同时在旧平台上改，本地缓存的 id 会过期。
 const bindingIds = ref<Record<string, string>>({})
+/** 后端绑定读到了才判「未绑定」：读取中 / 读失败时不下结论，免得把真绑定误标成没绑 */
+const bindingsLoaded = ref(false)
 const busy = ref(false)
 async function loadBindings() {
-  if (!props.configId) { bindingIds.value = {}; return }
+  if (!props.configId) { bindingIds.value = {}; bindingsLoaded.value = false; return }
   try {
     const rows = (await configApi.configParams(props.configId, { size: 100 })).list
     bindingIds.value = Object.fromEntries(rows.map((row) => [row.paramId, row.id]))
+    bindingsLoaded.value = true
   } catch {
     bindingIds.value = {} // 拉不到就退回只改本地，不阻塞界面
+    bindingsLoaded.value = false
   }
 }
 watch(() => props.configId, loadBindings, { immediate: true })
+
+/**
+ * 列表里有、配置上却没有绑定记录的参数（2026-11-26 186 源 491000036 实测）：节点没有绑定时，
+ * 画布按 URL 里的 $PARAM$_id 占位自动把参数放进列表（flowModel.layout），看着像绑好了，
+ * 但后端配置没有这条绑定，loadParams 查不到，发起抓取不带参数值。这类要明确标出来并能一键绑定。
+ * 没有配置 ID（新建节点）时绑定只在本地，不算。
+ */
+function notOnConfig(id: string): boolean {
+  return !!props.configId && bindingsLoaded.value && !bindingIds.value[id]
+}
+const notOnConfigIds = computed(() => refs.value.filter(notOnConfig))
+/** URL 里有占位、但不在列表里或没真正绑到配置上的参数 */
+const unboundTokenIds = computed(() => tokenIds.value.filter((id) => !refs.value.includes(id) || notOnConfig(id)))
+
+/** 写后端绑定（configParamAdd），成功后重读绑定；失败提示并返回 false */
+async function bindOnConfig(id: string): Promise<boolean> {
+  if (!props.configId) return true
+  busy.value = true
+  try {
+    await configApi.bindParam(props.configId, id)
+    await loadBindings()
+    return true
+  } catch (e) {
+    ElMessage.error(`绑定参数失败：${(e as Error)?.message ?? String(e)}`)
+    return false
+  } finally {
+    busy.value = false
+  }
+}
 async function loadOne(id: string) {
   loading[id] = true
   try {
@@ -75,6 +107,11 @@ const urlPreview = computed(() => {
   // 绑了参数但 URL 里没有占位：说清楚「没有可代入的地方」，别让人以为参数会改 URL（参数也可能用在登录等别处，所以只说 URL）
   if (!ids.length) return refs.value.length ? { pending: false as const, noToken: true as const, missing: [], urls: [], total: 0, truncated: false } : null
   if (ids.some((id) => loading[id] || details[id] === undefined)) return { pending: true as const }
+  // 没绑到配置上的参数，发任务时后端拿不到它，URL 里会原样留着占位：不给假的代入结果
+  const notBound = ids.filter((id) => !refs.value.includes(id) || notOnConfig(id))
+  if (notBound.length) {
+    return { pending: false as const, notBound: notBound.map((id) => details[id]?.name ? `${details[id]!.name}（${id}）` : id), missing: [], urls: [], total: 0, truncated: false }
+  }
   const valuesByParam: Record<string, string[]> = {}
   for (const id of ids) {
     const pinned = props.paramValues[id]
@@ -105,20 +142,14 @@ function onPickValue(id: string, event: Event) {
   emit('update:paramValues', next)
 }
 async function bind(id: string) {
-  if (!id || refs.value.includes(id) || busy.value) return
-  // 有 configId 就先写后端，写成功才更新界面——否则就是"看着绑上了、刷新又没了"。
-  if (props.configId) {
-    busy.value = true
-    try {
-      await configApi.bindParam(props.configId, id)
-      await loadBindings()
-    } catch (e) {
-      ElMessage.error(`绑定参数失败：${(e as Error)?.message ?? String(e)}`)
-      return
-    } finally {
-      busy.value = false
-    }
+  if (!id || busy.value) return
+  // 已在列表里但没真正绑到配置：只补后端绑定，列表和取值不动
+  if (refs.value.includes(id)) {
+    if (notOnConfig(id) && await bindOnConfig(id)) ElMessage.success('已绑定到配置')
+    return
   }
+  // 有 configId 就先写后端，写成功才更新界面——否则就是"看着绑上了、刷新又没了"。
+  if (!await bindOnConfig(id)) return
   const picked = available.value.find((param) => param.paramId === id)
   if (picked) {
     details[id] = picked
@@ -169,11 +200,13 @@ function openCreate() {
   drawer.param = null
   drawer.visible = true
 }
-function onSaved(param: Param) {
+async function onSaved(param: Param) {
   details[param.paramId] = param
   loadOne(param.paramId)
-  if (!refs.value.includes(param.paramId)) emit('update:paramRefs', [...refs.value, param.paramId])
   loadAvailable()
+  // 新建参数也要真正绑到配置上，否则同样是「列表里有、发任务没有」
+  if (notOnConfig(param.paramId) && !await bindOnConfig(param.paramId)) return
+  if (!refs.value.includes(param.paramId)) emit('update:paramRefs', [...refs.value, param.paramId])
 }
 
 function kindLabel(kind: Param['kind']) {
@@ -189,7 +222,7 @@ function kindLabel(kind: Param['kind']) {
         <button class="rc-btn" type="button" :disabled="!pickerValue" @click="bind(pickerValue)">绑定</button>
         <button v-if="!props.templateDefaults" class="rc-btn" type="button" @click="openCreate">＋ 新建参数</button>
       </div>
-      <div v-if="unboundTokenIds.length" class="upe-warn">URL 中的参数 {{ unboundTokenIds.join('、') }} 尚未绑定，请从上方选择已有参数{{ props.templateDefaults ? '' : '或新建参数' }}。</div>
+      <div v-if="unboundTokenIds.length" class="upe-warn" data-testid="url-param-unbound">URL 中的参数 {{ unboundTokenIds.join('、') }} 尚未绑定到配置{{ props.configId ? ` #${props.configId}` : '' }}，发起抓取时不会带参数值。{{ notOnConfigIds.length ? '请点下方参数的「绑定到配置」' : `请从上方选择已有参数${props.templateDefaults ? '' : '或新建参数'}` }}。</div>
       <div v-if="fragmentWarning" class="upe-warn">参数写在 URL 的 # 片段里，普通网页抓取（HTTP 请求）读不到，请改用“浏览器抓取”节点。</div>
       <div v-if="!refs.length" class="upe-empty">暂无参数配置</div>
       <div v-for="id in refs" :key="id" class="upe-row">
@@ -197,7 +230,13 @@ function kindLabel(kind: Param['kind']) {
         <template v-else-if="details[id]">
           <div class="upe-row-head">
             <div class="upe-identity"><span class="upe-id">{{ id }}</span><span class="upe-name">{{ details[id]!.name }}</span><span class="upe-meta">{{ details[id]!.group || '未分组' }} · {{ kindLabel(details[id]!.kind) }}</span></div>
-            <div class="upe-row-actions"><button class="upe-link danger" type="button" @click="unbind(id)">解绑</button></div>
+            <div class="upe-row-actions">
+              <template v-if="notOnConfig(id)">
+                <span class="upe-unsaved" data-testid="url-param-not-on-config" title="只是 URL 里写了这个参数的占位，配置上没有绑定记录，发起抓取时后端拿不到它">未绑定到配置</span>
+                <button class="upe-link" type="button" :disabled="busy" data-testid="url-param-bind-config" @click="bind(id)">绑定到配置</button>
+              </template>
+              <button class="upe-link danger" type="button" @click="unbind(id)">{{ notOnConfig(id) ? '移除' : '解绑' }}</button>
+            </div>
           </div>
           <div class="upe-override"><label>{{ props.templateDefaults ? '模板默认值' : '当前源取值' }}</label><select class="rc-select upe-value" :value="props.paramValues[id] || ''" @change="onPickValue(id, $event)"><option value="">使用默认值：{{ details[id]!.defaultValue || candidates[id]?.[0] || '无' }}</option><option v-for="value in candidates[id]" :key="value" :value="value">{{ value }}</option></select></div>
         </template>
@@ -206,6 +245,9 @@ function kindLabel(kind: Param['kind']) {
       <div v-if="urlPreview" class="upe-preview" data-testid="url-param-preview">
         <label>代入后的 URL</label>
         <div v-if="urlPreview.pending" class="muted">取值查询中…</div>
+        <div v-else-if="'notBound' in urlPreview" class="upe-preview-miss" data-testid="url-param-preview-notbound">
+          {{ urlPreview.notBound?.join('、') }} 还没绑定到配置，发起抓取时不会代入，任务 URL 会原样保留占位。绑定后这里显示代入结果。
+        </div>
         <div v-else-if="'noToken' in urlPreview" class="muted" data-testid="url-param-preview-notoken">{{ props.url ? '当前 URL 里没有参数占位（$PARAM$_参数ID），已绑定的参数不会代入 URL。' : '当前节点没有 URL，没有可代入参数的地方。' }}</div>
         <div v-else-if="urlPreview.missing.length" class="upe-preview-miss" data-testid="url-param-preview-missing">
           {{ urlPreview.missing.join('、') }} 没有可用取值（未选当前源取值、没有默认值，生成值也为空），运行时 URL 里这个位置会是空的。可到「规则资产 → 参数中心」打开参数点「生成值预览」核对。
@@ -235,6 +277,7 @@ function kindLabel(kind: Param['kind']) {
 .upe-preview { margin-top: 10px; padding: 8px 9px; border: 1px solid #dbeafe; border-radius: 7px; background: #f8fbff; display: grid; gap: 4px; min-width: 0; }
 .upe-preview label { color: var(--rc-muted); font-size: 11px; font-weight: 600; }
 .upe-preview-url { font-family: var(--rc-mono, ui-monospace, monospace); font-size: 11px; color: var(--rc-text-2); word-break: break-all; }
+.upe-unsaved { color: var(--rc-warn, #d97706); font-size: 11px; }
 .upe-preview-miss { font-size: 11px; line-height: 1.5; color: var(--rc-warn, #d97706); }
 @media (max-width: 520px) { .upe-row-head { align-items: flex-start; flex-direction: column; gap: 5px; }.upe-row-actions { padding-left: 0; }.upe-override { grid-template-columns: 1fr; gap: 4px; } }
 </style>

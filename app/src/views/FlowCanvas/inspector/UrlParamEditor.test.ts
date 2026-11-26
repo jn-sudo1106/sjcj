@@ -79,6 +79,71 @@ describe('UrlParamEditor', () => {
     })
   })
 
+  describe('列表里有、配置上没绑定的参数（1126 源 491000036）', () => {
+    afterEach(() => { vi.restoreAllMocks() })
+    const stubs = { 'el-drawer': { template: '<div><slot /></div>' } }
+    const url = 'https://basic.10jqka.com.cn/600519/event.html#code=$PARAM$_791000'
+    const setup = () => {
+      vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({ total: 0, list: [] })
+      vi.spyOn(paramApi, 'paramDetail').mockResolvedValue({ paramId: '791000', name: 'A股-股票ID', kind: 'database' } as never)
+      vi.spyOn(paramApi, 'genValues').mockResolvedValue(['600519', '000001'])
+    }
+    const mountIt = () => mount(UrlParamEditor, { props: { url, configId: '1910082', paramRefs: ['791000'], paramValues: {} }, global: { stubs } })
+
+    it('URL 自动带进来的参数：标「未绑定到配置」、提示发抓取不带值、预览不给假的代入结果', async () => {
+      setup()
+      vi.spyOn(configApi, 'configParams').mockResolvedValue({ total: 0, list: [] })
+      const w = mountIt()
+      await flushPromises()
+      expect(w.find('[data-testid="url-param-not-on-config"]').exists()).toBe(true)
+      expect(w.get('[data-testid="url-param-unbound"]').text()).toContain('791000 尚未绑定到配置 #1910082，发起抓取时不会带参数值')
+      expect(w.get('[data-testid="url-param-preview-notbound"]').text()).toContain('A股-股票ID（791000） 还没绑定到配置')
+      expect(w.findAll('.upe-preview-url')).toHaveLength(0)
+    })
+
+    it('点「绑定到配置」真写 configParamAdd，绑上后标记消失、预览出代入结果，列表不重复', async () => {
+      setup()
+      const params = vi.spyOn(configApi, 'configParams')
+        .mockResolvedValueOnce({ total: 0, list: [] })
+        .mockResolvedValue({ total: 1, list: [{ id: '45325', paramId: '791000', paramName: 'A股-股票ID', valueShow: '600519' }] })
+      const bind = vi.spyOn(configApi, 'bindParam').mockResolvedValue({ ok: true } as never)
+      const w = mountIt()
+      await flushPromises()
+      await w.get('[data-testid="url-param-bind-config"]').trigger('click')
+      await flushPromises()
+      expect(bind).toHaveBeenCalledWith('1910082', '791000')
+      expect(params).toHaveBeenCalledTimes(2)
+      expect(w.find('[data-testid="url-param-not-on-config"]').exists()).toBe(false)
+      expect(w.find('[data-testid="url-param-unbound"]').exists()).toBe(false)
+      expect(w.findAll('.upe-preview-url').map((n) => n.text())).toEqual([
+        'https://basic.10jqka.com.cn/600519/event.html#code=600519',
+        'https://basic.10jqka.com.cn/600519/event.html#code=000001',
+      ])
+      expect(w.emitted('update:paramRefs')).toBeUndefined()
+    })
+
+    it('读绑定失败时不下结论：不把参数标成未绑定', async () => {
+      setup()
+      vi.spyOn(configApi, 'configParams').mockRejectedValue(new Error('网络异常'))
+      const w = mountIt()
+      await flushPromises()
+      expect(w.find('[data-testid="url-param-not-on-config"]').exists()).toBe(false)
+      expect(w.find('[data-testid="url-param-unbound"]').exists()).toBe(false)
+    })
+
+    it('新建参数保存后也真正绑到配置上', async () => {
+      setup()
+      vi.spyOn(configApi, 'configParams').mockResolvedValue({ total: 0, list: [] })
+      const bind = vi.spyOn(configApi, 'bindParam').mockResolvedValue({ ok: true } as never)
+      const w = mount(UrlParamEditor, { props: { url: 'https://example.com', configId: '1910082', paramRefs: [], paramValues: {} }, global: { stubs } })
+      await flushPromises()
+      w.findComponent({ name: 'ParamEditorDrawer' }).vm.$emit('saved', { paramId: '800001', name: '新参数', kind: 'list' })
+      await flushPromises()
+      expect(bind).toHaveBeenCalledWith('1910082', '800001')
+      expect(w.emitted('update:paramRefs')!.at(-1)![0]).toEqual(['800001'])
+    })
+  })
+
   // 2026-08-26 拍板放开生产写（config/configParamAdd|Del 进白名单）：绑定/解绑必须真写后端。
   // 此前解绑只改内存，刷新后配置里的绑定又被读回来，等于按钮没生效。
   describe('绑定/解绑接真实接口（有 configId 时）', () => {
