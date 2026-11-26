@@ -2592,7 +2592,13 @@ function buildLegacyRowQuery(q: RowQuery) {
     // 时间列（UPDATE_DT/CREATE_DT）直接使用物理列名排序，不需要 (+ 0) 数值化。
     sorted: '0',
     field: mappedField ? (isTimeField ? mappedField : `(${mappedField}+ 0)`) : undefined,
-    type: q.sortField ? (q.sortOrder === 'descend' ? ' DESC ' : ' ASC ') : undefined,
+    // 二级排序键：后端只认一个 key（`orderBy = field + " " + type`，见 TbEntryController.java:298-299），
+    // 排序键相同的行由数据库自己决定先后，翻页时会跳、看着像"没排序"。这里把 type 拼成
+    // ` DESC , ENTRY_ID DESC`，让并列行按主键兜底稳定下来（永远降序，与列方向无关）。
+    // 按 ENTRY_ID 本身排时不重复拼。
+    type: q.sortField
+      ? `${q.sortOrder === 'descend' ? ' DESC ' : ' ASC '}${mappedField === 'ENTRY_ID' ? '' : ', ENTRY_ID DESC'}`
+      : undefined,
     enable: '0',
   }
 }

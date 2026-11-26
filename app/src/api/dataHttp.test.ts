@@ -214,7 +214,8 @@ describe('实体数据 API 旧平台 HTTP 契约', () => {
     const payload = decryptBody(fetchMock.mock.calls[0][1] as RequestInit)
     expect(payload.sorted).toBe('0')
     expect(payload.field).toBe('(K1+ 0)')
-    expect(payload.type).toBe(' DESC ')
+    // 二级键：并列行按 ENTRY_ID 兜底，避免翻页时同值行顺序漂移
+    expect(payload.type).toBe(' DESC , ENTRY_ID DESC')
   })
 
   it('排序：UPDATE_DT 与 updateDt 映射并直接按列名排序，不作数值化 hack', async () => {
@@ -225,13 +226,25 @@ describe('实体数据 API 旧平台 HTTP 契约', () => {
     let payload = decryptBody(fetchMock.mock.calls[0][1] as RequestInit)
     expect(payload.sorted).toBe('0')
     expect(payload.field).toBe('UPDATE_DT')
-    expect(payload.type).toBe(' DESC ')
+    expect(payload.type).toBe(' DESC , ENTRY_ID DESC')
 
     await dataApi.rowQueryPaged({ tableId: '1042', sortField: 'updateDt', sortOrder: 'descend' })
     payload = decryptBody(fetchMock.mock.calls[1][1] as RequestInit)
     expect(payload.sorted).toBe('0')
     expect(payload.field).toBe('UPDATE_DT')
-    expect(payload.type).toBe(' DESC ')
+    expect(payload.type).toBe(' DESC , ENTRY_ID DESC')
+  })
+
+  // 二级排序键（2026-11-26）：并列行按 ENTRY_ID 兜底；按 ENTRY_ID 自己排时不再重复拼。
+  it('排序：非 ENTRY_ID 列自动补二级键，ENTRY_ID 列不重复拼', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, count: 0, data: [] }))
+    const { dataApi } = await import('./index')
+
+    await dataApi.rowQueryPaged({ tableId: '1042', sortField: 'K2', sortOrder: 'ascend' })
+    expect(decryptBody(fetchMock.mock.calls[0][1] as RequestInit).type).toBe(' ASC , ENTRY_ID DESC')
+
+    await dataApi.rowQueryPaged({ tableId: '1042', sortField: 'ENTRY_ID', sortOrder: 'descend' })
+    expect(decryptBody(fetchMock.mock.calls[1][1] as RequestInit).type).toBe(' DESC ')
   })
 
   it('无排序时 sorted 为字符串 "0"，不带 field/type', async () => {

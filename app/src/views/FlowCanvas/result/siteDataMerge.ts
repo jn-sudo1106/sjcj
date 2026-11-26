@@ -76,8 +76,22 @@ function compareKeys(a: number | string, b: number | string): number {
 /** 归并方向。只有这一个维度可调——归并键固定是 dataId(ENTRY_ID)，见本文件顶部说明。 */
 export type MergeOrder = 'ascend' | 'descend'
 
+/**
+ * 两行比较：主键相同时按 dataId **降序**兜底。
+ * 与后端载荷里的 `, ENTRY_ID DESC` 呼应——只靠一个排序键时，时间戳/数值相同的行顺序由数据库自选，
+ * 翻页会跳来跳去，用户看着像"没排序"（2026-11-26 反馈）。
+ */
+function compareRows<T extends MergeRow>(a: T, b: T, field: string, order: MergeOrder): number {
+  const cmp = compareKeys(mergeKey(a, field), mergeKey(b, field))
+  if (cmp !== 0) return cmp * (order === 'ascend' ? 1 : -1)
+  const da = Number(a.dataId)
+  const db = Number(b.dataId)
+  if (!Number.isFinite(da) || !Number.isFinite(db)) return 0
+  return db - da
+}
+
 function sortRows<T extends MergeRow>(rows: T[], order: MergeOrder, field: string): T[] {
-  return [...rows].sort((a, b) => compareKeys(mergeKey(a, field), mergeKey(b, field)) * (order === 'ascend' ? 1 : -1))
+  return [...rows].sort((a, b) => compareRows(a, b, field, order))
 }
 
 export type FetchPage<T extends MergeRow = DataRow> = (sourceId: string, page: number, size: number) => Promise<T[]>
@@ -113,9 +127,8 @@ function popNext<T extends MergeRow>(states: MergeSourceState<T>[], order: Merge
   for (const s of states) {
     if (!s.buffer.length) continue
     if (!best) { best = s; continue }
-    // 降序取最大、升序取最小：compareKeys(<0 表示 s 在前)
-    const cmp = compareKeys(mergeKey(s.buffer[0], field), mergeKey(best.buffer[0], field))
-    const ahead = order === 'ascend' ? cmp < 0 : cmp > 0
+    // 降序取最大、升序取最小：compareRows(<0 表示 s 排在 best 前)
+    const ahead = compareRows(s.buffer[0], best.buffer[0], field, order) < 0
     if (ahead) best = s
   }
   return best ? (best.buffer.shift() ?? null) : null

@@ -244,3 +244,23 @@ describe('siteDataMerge · 日期列排序', () => {
     expect(result.rows.map((r) => r.dataId)).toEqual(['2', '1'])
   })
 })
+
+// 2026-11-26：只按一个键排时，键值相同的行由数据库自选顺序，翻页会跳。
+// 这里补二级键（dataId 降序），与后端载荷里的 `, ENTRY_ID DESC` 一致。
+describe('siteDataMerge · 并列值按 dataId 兜底', () => {
+  const at = (id: string, dt: string) => ({ dataId: id, sourceId: 'a', title: id, summary: '', acceptState: 'pending', values: { UPDATE_DT: dt } }) as unknown as DataRow
+
+  it('时间戳相同：降序时 dataId 大的在前', async () => {
+    const result = await mergeLoadMore(initMergeState(['a']), 3, 3,
+      async () => [at('7405578', '2026-11-25 15:43:44'), at('7408877', '2026-11-25 15:43:44'), at('7405573', '2026-11-25 15:43:44')],
+      { order: 'descend', sortField: 'UPDATE_DT' })
+    expect(result.rows.map((r) => r.dataId)).toEqual(['7408877', '7405578', '7405573'])
+  })
+
+  it('时间戳相同：升序时也是 dataId 大的在前（并列方向与列方向无关）', async () => {
+    const result = await mergeLoadMore(initMergeState(['a']), 2, 2,
+      async () => [at('2', '2026-11-25 15:43:44'), at('9', '2026-11-25 15:43:44')],
+      { order: 'ascend', sortField: 'UPDATE_DT' })
+    expect(result.rows.map((r) => r.dataId)).toEqual(['9', '2'])
+  })
+})
