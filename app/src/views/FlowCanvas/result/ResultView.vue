@@ -1886,25 +1886,42 @@ const codeTest = reactive<{ visible: boolean; loading: boolean; error: string; o
   error: '',
   output: '',
 })
-function buildCodeParams(row: { values?: Record<string, unknown> } | null): Record<string, string> {
-  const inputFields = selectedCfg.value?.ruleCfg?.inputFields ?? []
+function buildCodeParams(row: DataRow, cfg: NodeConfig | undefined, fields: DataTableMeta['fields'], script: string): Record<string, string> {
+  const inputFields = cfg?.ruleCfg?.inputFields ?? []
   // ruleCfg.inputFields 只在打开「表配置」时由 contextMap 还原；直接从数据视图进来（刷新后）是空数组，
   // 这时用已落库的步骤入参列（taskCfg.contextMap，K 列名）匹配（2026-11-17 186 复测：参数全空）。
-  const contextColumns = selectedCfg.value?.taskCfg?.contextMap ?? []
+  const contextColumns = cfg?.taskCfg?.contextMap ?? []
   if (!inputFields.length && !contextColumns.length) return {}
 
-  const params: Record<string, unknown> = {}
-  for (const field of meta.value?.fields ?? []) {
+  const params = new Map<string, string>()
+  const paramsByColumn = new Map<string, string>()
+  for (const field of fields) {
     const column = field.columnName ?? ''
     const picked = inputFields.length
       ? inputFields.includes(field.prop) || inputFields.includes(column)
       : !!column && contextColumns.includes(column)
     if (!picked) continue
-    const raw = row?.values?.[field.columnName ?? field.prop]
-    // 入参名与生成时告诉模型的一致：去掉「-K列号」（scriptParamName），否则 INDICATOR-K1 不是合法参数名。
-    params[scriptParamName(field.prop)] = raw == null ? '' : String(raw)
+    const raw = row.values?.[field.columnName ?? field.prop]
+    const value = raw == null ? '' : String(raw)
+    params.set(scriptParamName(field.prop), value)
+    if (column) paramsByColumn.set(column, value)
   }
-  return params as Record<string, string>
+
+  // 执行器按关键字调用。规则脚本可能只声明部分字段，且允许用物理列名（如 K1）。
+  // 只对首个函数为 main 的普通具名入参做匹配，复杂签名沿用原传参方式。
+  const firstDef = /^(?:async[ \t]+)?def[ \t]+/m.exec(script)
+  const signature = firstDef && /^def[ \t]+main[ \t]*\(([^()]*)\)[ \t]*(?:->[^:\r\n]+)?[ \t]*:/.exec(script.slice(firstDef.index))
+  const declared = signature?.[1]?.trim().replace(/,$/, '')
+  const names = declared ? declared.split(',').map((name) => name.trim()) : []
+  if (!signature || names.some((name) => !/^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(name))) {
+    return Object.fromEntries(params)
+  }
+  const bound = new Map<string, string>()
+  for (const name of names) {
+    const value = params.get(name) ?? paramsByColumn.get(name)
+    if (value !== undefined) bound.set(name, value)
+  }
+  return Object.fromEntries(bound)
 }
 function stringifyCodeResult(value: unknown): string {
   if (typeof value === 'string') return value
@@ -1940,15 +1957,22 @@ async function onTestScript() {
   codeTest.error = ''
   codeTest.output = ''
   try {
+    const cfg = selectedCfg.value
+    const fields = meta.value?.fields ?? []
+    const script = cfg?.ruleCfg && /\.py$/i.test(codePath)
+      ? await ruleApi.fileDownloadScript(codePath).catch(() => '')
+      : ''
     const result = await ruleApi.executeCode({
       codePath,
-      params: buildCodeParams(row),
+      params: buildCodeParams(row, cfg, fields, script),
       timeout: 300,
     })
     codeTest.output = stringifyCodeResult(result)
     ElMessage.success('脚本测试已完成')
   } catch (error) {
-    codeTest.error = error instanceof Error ? error.message : String(error)
+    const detail = error instanceof ApiError ? (error.cause as { body?: { detail?: unknown } } | undefined)?.body?.detail : undefined
+    const message = error instanceof Error ? error.message : String(error)
+    codeTest.error = typeof detail === 'string' && detail.trim() && !message.includes(detail) ? `${message}：${detail}` : message
   } finally {
     codeTest.loading = false
   }

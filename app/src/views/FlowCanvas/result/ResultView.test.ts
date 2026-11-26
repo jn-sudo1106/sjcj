@@ -118,6 +118,9 @@ afterEach(() => {
 })
 
 describe('ResultView', () => {
+  beforeEach(() => {
+    vi.spyOn(ruleApi, 'fileDownloadScript').mockResolvedValue('')
+  })
   afterEach(() => {
     vi.restoreAllMocks()
     delete mockRouteQuery.scriptPath
@@ -538,6 +541,49 @@ describe('ResultView', () => {
       params: { INDICATOR: '海外净资产' },
       timeout: 300,
     })
+  })
+
+  it.each([
+    ['def main(K1):\n    return {"K1": K1}', { K1: '  天博   新闻  ' }],
+    ['def main(标题):\n    return {"K1": 标题}', { 标题: '  天博   新闻  ' }],
+    ['def main(**kwargs):\n    return kwargs', { 标题: '  天博   新闻  ', SOURCE: '天博' }],
+  ])('规则脚本试跑按签名绑定已配置字段：%s', async (script, expected) => {
+    setActivePinia(createPinia())
+    const codePath = '/code01/202611/1795674915917.py'
+    mockRouteQuery.scriptPath = codePath
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    flow.configs.last = cfg({
+      title: '规则处理',
+      inputTable: 'T2',
+      ruleCfg: { mode: 'ref', describe: '', inputTableId: 'T2', inputFields: ['标题-K1', 'SOURCE-K2'], outputFields: [] },
+    })
+    const row = {
+      dataId: '10146931', sourceId: current.sourceId, title: '天博新闻', summary: '',
+      acceptState: 'pending' as const, values: { K1: '  天博   新闻  ', K2: '天博' },
+    }
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [row] })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
+      ...meta,
+      tableId: 'T2',
+      fields: [
+        { prop: '标题-K1', type: 'string', desc: '标题', columnName: 'K1' },
+        { prop: 'SOURCE-K2', type: 'string', desc: '来源', columnName: 'K2' },
+      ],
+    })
+    const download = vi.spyOn(ruleApi, 'fileDownloadScript').mockResolvedValue(script)
+    const execute = vi.spyOn(ruleApi, 'executeCode').mockResolvedValue({ success: true, result: { K1: '天博 新闻' } })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'last')
+    await wrapper.findAll('button').find((button) => button.text() === '测试脚本')!.trigger('click')
+    await flushPromises()
+
+    expect(download).toHaveBeenCalledWith(codePath)
+    expect(execute).toHaveBeenCalledExactlyOnceWith({ codePath, params: expected, timeout: 300 })
+    expect(wrapper.text()).toContain('天博 新闻')
   })
 
   it('带 scriptPath 打开输入≠输出的规则节点时默认看输入表', async () => {
