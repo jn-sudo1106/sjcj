@@ -142,7 +142,7 @@ const props = defineProps<{
   /**
    * 源列表「来源组」能力开关（1008-04）：只在源管理源列表视图（`CollectAssets/SourceTab.vue`）开。
    * 开时多出两列（来源组 / 默认流程）、来源组筛选下拉、勾选后的「选中来源」批量操作
-   * （源流程配置 / 调整来源组 / 指定流程运行一次）。
+   * （源流程配置 / 调整来源组 / 批量配定时）。指定流程运行一次已并进「发任务 ▾ → 按指定流程发任务」（1126）。
    */
   groupOps?: boolean
   /** 源管理左侧来源组筛选；其它列表继续使用原来的顶部下拉。 */
@@ -475,7 +475,7 @@ function sourceGroupNameOf(source: Source): string {
   if (!source.sourceGroupId) return '未分组'
   return sourceGroupNameById.value.get(source.sourceGroupId) ?? `组 #${source.sourceGroupId}`
 }
-/** 流程候选（默认流程列名称、指定流程运行一次的选项），排除停用 */
+/** 流程候选（默认流程列名称、按指定流程发任务的选项），排除停用 */
 const flowOptions = ref<FlowRecord[]>([])
 let flowOptionsTask: Promise<void> | null = null
 async function loadFlowOptions() {
@@ -1127,7 +1127,6 @@ async function onBatchFlowsSaved(sourceIds: string[]) {
   selectedIds.value = remaining.filter((id) => rows.value.some((row) => row.sourceId === id))
 }
 const adjustGroupOpen = ref(false)
-const runOnceOpen = ref(false)
 const batchCronOpen = ref(false)
 const cleanupOpen = ref(false)
 const auth = useAuthStore()
@@ -1152,12 +1151,31 @@ function openAdjustGroup() {
   // 没勾选 = 按当前筛选范围调整（弹窗内二次确认）
   adjustGroupOpen.value = true
 }
-function openRunOnce() {
-  if (!selectedIds.value.length) {
-    ElMessage.warning('请先勾选要运行一次的来源')
+/**
+ * 「发任务 ▾」（2026-11-26 孙总：发任务时可以选择流程）：按默认流程 = 原来的发任务；按指定流程走下面这段。
+ * 与「归类 ▾」「选中来源 ▾」同款下拉；原「选中来源 → 指定流程运行一次」与它重复，已去掉。
+ * 复用「指定流程运行一次」的弹窗：从勾选源当前生效的流程里选一条，只对关联了它的源发，有参数先弹参数框。
+ * 只针对勾选的源——不勾选是按筛选范围发，可能上万个源，逐源查关联流程不现实，只能按默认流程（旧平台「手工发送」也要求先勾选）。
+ */
+const launchFlowPick = ref<{ ids: string[]; names: Record<string, string> } | null>(null)
+async function onLaunchCommand(command: string) {
+  if (command === 'default') {
+    await openLaunch()
     return
   }
-  runOnceOpen.value = true
+  if (command !== 'pick-flow') return
+  if (!selectedIds.value.length) {
+    ElMessage.warning('请先勾选源；不勾选时按当前筛选范围发任务，只能用各源的默认流程')
+    return
+  }
+  const { sendable, param } = partitionLaunchTargets(selectedSources.value)
+  const targets = [...sendable, ...param]
+  if (!targets.length) {
+    ElMessage.warning('选中的源都已停用，无法发任务')
+    return
+  }
+  await loadFlowOptions()
+  launchFlowPick.value = { ids: targets.map((s) => s.sourceId), names: Object.fromEntries(targets.map((s) => [s.sourceId, s.name])) }
 }
 /** 批量配定时（旧「操作类 → 定时任务变更 → 批量配定时」，2026-10-23） */
 function openBatchCron() {
@@ -1171,7 +1189,6 @@ function onGroupOpsCommand(command: string) {
   sourceGroupOpsOpen.value = false
   if (command === 'flow-config') openFlowConfigForSelected()
   else if (command === 'adjust-group') openAdjustGroup()
-  else if (command === 'run-once') openRunOnce()
   else if (command === 'batch-cron') openBatchCron()
   else if (command === 'cleanup-data' && cleanupAllowed.value) cleanupOpen.value = true
 }
@@ -2130,7 +2147,17 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
         <button class="sov-btn primary" type="button" data-testid="source-overview-search" @click="search">查询</button>
         <button class="sov-btn" type="button" @click="clearFilters">清空</button>
         <template v-if="!crossSite">
-          <button class="sov-btn primary" type="button" data-testid="source-launch" @click="openLaunch">发任务</button>
+          <span class="sov-launch-split">
+            <button class="sov-btn primary" type="button" data-testid="source-launch" title="按各源默认流程发任务" @click="openLaunch">发任务</button>
+            <el-dropdown trigger="click" placement="bottom-end" data-testid="source-launch-more" @command="onLaunchCommand">
+              <button class="sov-btn primary sov-launch-caret" type="button" aria-label="更多发任务方式" data-testid="source-launch-caret">▾</button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="pick-flow" data-testid="source-launch-pick-flow">按指定流程发任务（勾选源）</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </span>
         <CodeConfigButton class="sov-btn" data-testid="source-code-launch" :sources="selectedSources" :disabled="!selectedSources.length" label="代码生成" />
           <button class="sov-btn" type="button" data-testid="source-export" title="按当前查询条件导出全部命中的源，不是当前页或勾选项" @click="exportSources">导出</button>
         </template>
@@ -2206,13 +2233,22 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
             <el-dropdown-menu>
               <el-dropdown-item command="flow-config" data-testid="sg-ops-flow-config">源流程配置（勾选 1 个）</el-dropdown-item>
               <el-dropdown-item command="adjust-group" data-testid="sg-ops-adjust-group">{{ rangeAdjustAllowed ? '调整来源组（不勾选 = 按当前筛选范围）' : '调整来源组' }}</el-dropdown-item>
-              <el-dropdown-item command="run-once" data-testid="sg-ops-run-once">指定流程运行一次</el-dropdown-item>
               <el-dropdown-item command="batch-cron" data-testid="sg-ops-batch-cron">批量配定时</el-dropdown-item>
               <el-dropdown-item v-if="cleanupAllowed" divided command="cleanup-data" data-testid="sg-ops-cleanup-data">清理源数据</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <button class="sov-btn primary" type="button" data-testid="source-launch" @click="openLaunch">发任务</button>
+        <span class="sov-launch-split">
+            <button class="sov-btn primary" type="button" data-testid="source-launch" title="按各源默认流程发任务" @click="openLaunch">发任务</button>
+            <el-dropdown trigger="click" placement="bottom-end" data-testid="source-launch-more" @command="onLaunchCommand">
+              <button class="sov-btn primary sov-launch-caret" type="button" aria-label="更多发任务方式" data-testid="source-launch-caret">▾</button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="pick-flow" data-testid="source-launch-pick-flow">按指定流程发任务（勾选源）</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </span>
         <CodeConfigButton class="sov-btn" data-testid="source-code-launch" :sources="selectedSources" :disabled="!selectedSources.length" label="代码生成" />
         <button class="sov-btn" type="button" data-testid="source-export" title="按当前查询条件导出全部命中的源，不是当前页或勾选项" @click="exportSources">导出</button>
       </span>
@@ -2574,10 +2610,12 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
       @saved="onGroupOpsChanged"
     />
     <RunOnceDialog
-      v-if="runOnceOpen"
-      :source-ids="selectedIds"
+      v-if="launchFlowPick"
+      title="选择流程发任务"
+      :source-ids="launchFlowPick.ids"
+      :source-names="launchFlowPick.names"
       :flows="flowOptions"
-      @close="runOnceOpen = false"
+      @close="launchFlowPick = null"
     />
     <SourceDataCleanupDialog v-if="cleanupOpen" v-model="cleanupOpen" :source-ids="selectedIds" @cleaned="loadSources" />
     <SourceCronDialog v-if="batchCronOpen" v-model="batchCronOpen" :source-ids="selectedIds" :flows="flowOptions" />
@@ -2790,6 +2828,15 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
   font-weight: 600;
   line-height: 1;
 }
+/* 发任务拆分按钮（1126）：左「发任务」一键按默认流程发，右「▾」展开按指定流程发。
+   两颗都是系统 sov-btn primary，只把相接处的圆角去掉、中间留一条细白线，▾ 与「选中来源 ▾」同款字符。
+   必须写在上面 .sov-summary .sov-btn 之后且多一级类名：那条统一按钮规格的规则会把圆角、内边距改回去（11-26 实测两颗分开） */
+.sov-launch-split { display: inline-flex; align-items: stretch; }
+.sov-launch-split :deep(.el-dropdown) { display: flex; margin: 0; }
+.sov-launch-split > .sov-btn.primary { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.sov-launch-split .sov-btn.sov-launch-caret { margin-left: -1px; padding: 0 8px; border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-color: rgba(255, 255, 255, .45); }
+/* 紧凑筛选栏里直接子按钮是 34px（见 .sov-filter.is-compact 那条），拆分按钮多包了一层，同步高度 */
+.sov-filter.is-compact .sov-launch-split .sov-btn { height: 34px; }
 .sov-state { display: inline-flex; padding: 2px 7px; border-radius: 999px; background: #ecfdf3; color: #15803d; font-size: 11px; font-weight: 700; }
 .sov-state.error { background: #fef2f2; color: #dc2626; }
 .sov-state.muted { background: #f1f5f9; color: #64748b; }
@@ -2805,3 +2852,4 @@ defineExpose({ openLaunch, clearSelection, refresh, captureListReturn })
 .sov-sort.descending .sov-caret .sov-caret-down { border-top-color: var(--el-color-primary, #409eff); }
 .sov-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--rc-border-soft); }
 </style>
+

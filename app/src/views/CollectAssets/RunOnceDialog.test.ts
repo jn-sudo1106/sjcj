@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // 指定流程运行一次弹窗（1008-04，⑥）：逐源 sourceFlowIds 取生效流程 → 与流程候选求交集 →
 // 只对关联了所选流程的源 sendSnatchWithParam 带 flowId 分批提交 → 跳过 / 失败逐条展示。
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import RunOnceDialog from './RunOnceDialog.vue'
@@ -16,6 +16,7 @@ async function settle() {
   await flushPromises()
   await new Promise((r) => setTimeout(r, 60))
 }
+beforeEach(() => { vi.spyOn(sourceApi, 'loadParams').mockResolvedValue(null as never) })
 afterEach(() => { vi.restoreAllMocks(); document.body.innerHTML = '' })
 const dom = (sel: string) => document.querySelector(sel) as HTMLElement | null
 
@@ -82,6 +83,32 @@ describe('指定流程运行一次弹窗', () => {
     await settle()
     expect(send).toHaveBeenCalled()
     expect(document.body.textContent).toContain('未发出')
+    wrapper.unmount()
+  })
+
+  it('选择流程发任务（1126）：有参数先弹参数框，参数框发送带同一条流程，结果记进明细', async () => {
+    vi.spyOn(sourceGroupApi, 'sourceFlowIds').mockResolvedValue(['21000006'])
+    vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({ '1910082': [{ paramId: 791000, paramName: 'A股-股票ID', curValue: '600519', allValues: ['600519', '000001'] }] } as never)
+    const send = vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: '操作成功' })
+    const wrapper = mount(RunOnceDialog, {
+      props: { sourceIds: ['491000036'], flows: FLOWS, title: '选择流程发任务', sourceNames: { '491000036': '高管持股变动' } },
+      global: { plugins: [ElementPlus] },
+      attachTo: document.body,
+    })
+    await settle()
+    expect(document.body.textContent).toContain('选择流程发任务')
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', '21000006')
+    await settle()
+    ;(dom('[data-testid="ro-submit"]') as HTMLButtonElement).click()
+    await settle()
+    expect(sourceApi.loadParams).toHaveBeenCalledWith(['491000036'])
+    expect(send).not.toHaveBeenCalled()
+    const modal = wrapper.findComponent({ name: 'SourceParamModal' })
+    expect(document.body.textContent).toContain('高管持股变动')
+    await (modal.props('callback') as (...a: unknown[]) => Promise<unknown>)(['491000036'], { '1910082_791000': '600519' }, 1, ['791000'], 0, '')
+    await settle()
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ ids: ['491000036'], param: { '1910082_791000': '600519' }, all: 0, flowId: '21000006' }))
+    expect(dom('[data-testid="ro-result"]')?.textContent).toContain('1')
     wrapper.unmount()
   })
 })

@@ -32,6 +32,12 @@ const source: Source = {
   sourceId: 'src-1', name: '当前网站源', url: 'https://example.com', configId: 'cfg-1', mainTable: 'TB_1', owner: 'tester', state: 'C', siteId: 'site-current', dataCount: 3,
 }
 
+/** 点「发任务」主按钮：按各源默认流程发（右侧 ▾ 才是按指定流程） */
+async function launchDefault(wrapper: VueWrapper) {
+  await wrapper.get('[data-testid="source-launch"]').trigger('click')
+  await flushPromises()
+}
+
 describe('SourceOverviewView', () => {
   it('目录跳转快照保留筛选和页码，返回网站源视图时恢复', async () => {
     const query = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 40, list: [source] })
@@ -175,11 +181,11 @@ describe('SourceOverviewView', () => {
     // 1104：导出会等名称类候选（站点 / 主表名），这里给空结果，免得等真请求
     vi.spyOn(dataApi, 'tables').mockResolvedValue([])
     vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 0, list: [] })
-    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeSourceIds: ['src-1'] } })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeSourceIds: ['src-1'] }, global: { plugins: [ElementPlus] } })
     await flushPromises()
     await wrapper.get('[data-testid="source-export"]').trigger('click')
     await flushPromises()
-    await wrapper.get('[data-testid="source-launch"]').trigger('click')
+    await launchDefault(wrapper)
     await flushPromises()
     expect(page.mock.calls.length).toBeGreaterThan(1)
     for (const [query] of page.mock.calls) expect(query?.sourceIds).toBe('src-1')
@@ -358,6 +364,29 @@ describe('SourceOverviewView · 勾选与批量', () => {
     expect(wrapper.get('[data-testid="source-batch-count"]').text()).toContain('已选 2')
   })
 
+  it('发任务 ▾ → 选择流程发任务（1126）：要先勾选；勾选后排除停用源，打开选流程弹窗', async () => {
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({}) as never)
+    vi.spyOn(flowCenterApi, 'list').mockResolvedValue([{ id: '21000006', name: 'twitter补数据', state: 'A' }] as never)
+    const withDisabled: Source[] = [...rows, { ...source, sourceId: 'src-3', name: '停用源', disabled: true }]
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 3, list: withDisabled })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    const more = wrapper.findAllComponents({ name: 'ElDropdown' }).find((c) => c.vm.$attrs['data-testid'] === 'source-launch-more')!
+    more.vm.$emit('command', 'pick-flow')
+    await flushPromises()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('请先勾选源'))
+    expect(wrapper.findComponent({ name: 'RunOnceDialog' }).exists()).toBe(false)
+
+    await wrapper.get('[data-testid="source-check-all"]').setValue(true)
+    more.vm.$emit('command', 'pick-flow')
+    await flushPromises()
+    const dialog = wrapper.findComponent({ name: 'RunOnceDialog' })
+    expect(dialog.props('title')).toBe('选择流程发任务')
+    expect(dialog.props('sourceIds')).toEqual(['src-1', 'src-2'])
+    expect(dialog.props('sourceNames')).toMatchObject({ 'src-2': '第二个源' })
+    expect(dialog.props('flows')).toEqual([expect.objectContaining({ id: '21000006' })])
+  })
+
   it('发任务按钮常驻，不勾选也能看到', async () => {
     const wrapper = await mountWithRows()
     expect(wrapper.find('[data-testid="source-launch"]').exists()).toBe(true)
@@ -429,10 +458,10 @@ describe('SourceOverviewView · 勾选与批量', () => {
     const send = vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: '已下发' })
     vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: rows })
-    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body, global: { plugins: [ElementPlus] } })
     await flushPromises()
     await wrapper.get('[data-testid="source-check-all"]').setValue(true)
-    await wrapper.get('[data-testid="source-launch"]').trigger('click')
+    await launchDefault(wrapper)
     await flushPromises()
 
     expect(wrapper.find('[data-testid="launch-confirm-dialog"]').exists()).toBe(false)
@@ -448,10 +477,10 @@ describe('SourceOverviewView · 勾选与批量', () => {
     const send = vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: '已下发' })
     vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 3, list: many })
-    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body, global: { plugins: [ElementPlus] } })
     await flushPromises()
     await wrapper.get('[data-testid="source-check-all"]').setValue(true)
-    await wrapper.get('[data-testid="source-launch"]').trigger('click')
+    await launchDefault(wrapper)
     await flushPromises()
 
     // 确认前不发
@@ -468,9 +497,9 @@ describe('SourceOverviewView · 勾选与批量', () => {
   it('没勾选时按当前筛选收 ID 再发，all 仍是 0', async () => {
     const send = vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: '已下发' })
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: rows })
-    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body, global: { plugins: [ElementPlus] } })
     await flushPromises()
-    await wrapper.get('[data-testid="source-launch"]').trigger('click')
+    await launchDefault(wrapper)
     await flushPromises()
     expect(page).toHaveBeenCalledWith(expect.objectContaining({ siteIds: 'site-current', page: 1, size: 500 }))
     expect(wrapper.get('[data-testid="launch-confirm-dialog"]').text()).toContain('当前筛选')
@@ -723,11 +752,11 @@ describe('SourceOverviewView · 标签', () => {
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source, tags: ['正文缺失'] }] })
     vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
     vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: '已下发' })
-    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, global: { plugins: [ElementPlus] } })
     await flushPromises()
     await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
     // 勾 1 个、无参数 → 直接发，没有确认框可点
-    await wrapper.get('[data-testid="source-launch"]').trigger('click')
+    await launchDefault(wrapper)
     await flushPromises()
     expect(wrapper.get('[data-testid="source-issue-tags"]').text()).toContain('正文缺失')
     wrapper.unmount()
