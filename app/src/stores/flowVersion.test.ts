@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { flowVersionApi, type FlowVersionOverview, type FlowVersionRef } from '@/api'
-import { useFlowVersionStore } from './flowVersion'
+import { sourceStepsVersionId, useFlowVersionStore } from './flowVersion'
 
 const row = (versionId: string, over: Partial<FlowVersionOverview['versions'][number]> = {}) => ({
   versionId, flowVer: 1, ver: 1, state: 'C', isLock: 0, isDelete: 0, baseId: null, ...over,
@@ -232,3 +232,20 @@ describe('useFlowVersionStore', () => {
   })
 })
 
+
+// 2026-11-26：源画布切视图时按它判断要不要重读节点（2806 源 430025645 从概览切到流程仍是发布版 v1 的节点）
+describe('sourceStepsVersionId', () => {
+  it('有草稿时流程视图读草稿、其他视图读发布版，两边不同', () => {
+    const v = { published: { versionId: '748' }, unpublishedReadVersionId: '801' }
+    expect(sourceStepsVersionId(v, true)).toBe('801')
+    expect(sourceStepsVersionId(v, false)).toBeNull()
+  })
+  it('没有草稿时两边都读发布版，切视图不用重读', () => {
+    const v = { published: { versionId: '748' }, unpublishedReadVersionId: null }
+    expect(sourceStepsVersionId(v, true)).toBe(sourceStepsVersionId(v, false))
+  })
+  it('没有发布版时任何视图都读兜底版本', () => {
+    const v = { published: undefined, unpublishedReadVersionId: '801' }
+    expect(sourceStepsVersionId(v, false)).toBe('801')
+  })
+})

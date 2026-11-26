@@ -11,7 +11,7 @@ import { flowCenterApi, siteApi, sourceApi, workflowBindingApi, type Source, typ
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { useFlowReadiness } from '@/views/FlowCanvas/canvas/useFlowReadiness'
 import { useRuntimeStore } from '../../stores/runtime'
-import { useFlowVersionStore } from '../../stores/flowVersion'
+import { sourceStepsVersionId, useFlowVersionStore } from '../../stores/flowVersion'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import LoginConfigSelectDialog from '@/views/FlowCanvas/launch/LoginConfigSelectDialog.vue'
 import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
@@ -391,6 +391,13 @@ function onSplitStart(e: MouseEvent) {
 }
 
 let sourceLoadSequence = 0
+/** 当前画布节点是按哪个源 / 流程 / 版本读的（versionId null = 发布版）；切视图时比对，需要别的版本就重读 */
+let loadedSteps: { sourceId: string; flowId: string; versionId: string | null } | null = null
+function stepsVersionStale(sourceId: string, editingView: boolean): boolean {
+  const flowVersion = useFlowVersionStore()
+  if (!loadedSteps || loadedSteps.sourceId !== sourceId || flowVersion.flowId !== loadedSteps.flowId) return false
+  return sourceStepsVersionId(flowVersion, editingView) !== loadedSteps.versionId
+}
 async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   const sequence = ++sourceLoadSequence
   const requestedQuery = { ...route.query }
@@ -477,7 +484,8 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     if (flowId) await flowVersion.load(flowId)
     if (!isCurrent()) return
     // 2026-11-23：没有发布版时（草稿状态对不上 / 只剩 draftId 等），兜底读最新未放弃版本，别再不带 versionId 读发布版
-    const versionId = editingView || !flowVersion.published ? flowVersion.unpublishedReadVersionId : null
+    const versionId = sourceStepsVersionId(flowVersion, editingView)
+    loadedSteps = flowId ? { sourceId, flowId, versionId } : null
     if (flowId) {
       try {
         steps = await flowCenterApi.steps(flowId, { withConfigDetails: false, backendScope: runtimeView ? 'default' : 'flow', ...(versionId ? { versionId } : {}) })
@@ -844,7 +852,16 @@ watch(
   async ([sid, stid, fid, mode, view], prev) => {
     if (isGate.value) return
     const changedBackend = !!import.meta.env.VITE_FLOW_PROXY_TARGET && prev && (normalizeSourceView(view) === 'flow') !== (normalizeSourceView(prev[4]) === 'flow')
-    if (prev && sid === prev[0] && stid === prev[1] && fid === prev[2] && mode === prev[3] && !changedBackend) return
+    if (prev && sid === prev[0] && stid === prev[1] && fid === prev[2] && mode === prev[3] && !changedBackend) {
+      // 只切了视图：流程视图读草稿、其他视图读发布版，有草稿时两边节点不同，要重读（2026-11-26，2806 源 430025645
+      // 从概览切到流程仍显示发布版 v1 的两个节点，头部却是「草稿 v2」，刷新才出现草稿里的 PDF 抓取 / 规则处理）
+      if (sid && stepsVersionStale(String(sid), normalizeSourceView(view) === 'flow')) {
+        await flushNodeConfigs()
+        if (flow.flowDirty) await autosave.flush()
+        await enterFromRoute()
+      }
+      return
+    }
     if (prev && sid === prev[0] && fid !== prev[2]) rememberCurrentFlowInspector()
     await enterFromRoute()
   },

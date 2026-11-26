@@ -30,6 +30,17 @@ export function canvasFlowIdOf(flow: { flowIdMode: boolean; flowId: string; sour
     : validFlowIdOf(flow.sourceCfg?.flowId) || validFlowIdOf(flow.sourceCtx?.flowId)
 }
 
+/**
+ * 源画布读步骤用哪个版本：流程视图（编辑）有草稿读草稿；数据 / 任务等视图反映正式运行，读发布版（null = 不带 versionId）；
+ * 没有发布版时任何视图都读兜底版本。2026-11-26：切视图时按它比对已读版本，不一致就重读（否则切到流程还看着发布版的节点）。
+ */
+export function sourceStepsVersionId(
+  version: { published: unknown; unpublishedReadVersionId: string | null },
+  editingView: boolean,
+): string | null {
+  return editingView || !version.published ? version.unpublishedReadVersionId : null
+}
+
 export const useFlowVersionStore = defineStore('flowVersion', () => {
   /** 画布当前展示的流程（顶部版本条、读哪个版本的步骤都按它） */
   const flowId = ref('')
