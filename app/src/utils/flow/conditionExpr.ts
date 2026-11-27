@@ -39,8 +39,15 @@ function quoteValue(value: string): string {
 function isNumericLiteral(value: string): boolean {
   return /^-?\d+(?:\.\d+)?$/.test(value)
 }
-function emitValue(value: string): string {
-  return isNumericLiteral(value) ? value : quoteValue(value)
+/** 平台 K 列物理类型都是字符串（varchar/text），执行侧（Aviator）拿到的值是 "1" 而不是 1，
+ *  `K11 == 1` 恒为 false 且不报错，直接 reject（2026-11-27 186 实测：源 491000039 逐笔成交节点
+ *  `K11 == 1` 把 K11=1 的行全部拒掉，改成 `K11 == '1'` 才通过）。所以 K 列的等值比较一律加引号；
+ *  裸数字只留给 NEXT_FLAG 这类运行时标记。 */
+function isTableColumn(field: string): boolean {
+  return /^K\d+$/i.test(field)
+}
+function emitValue(value: string, field = ''): string {
+  return isNumericLiteral(value) && !isTableColumn(field) ? value : quoteValue(value)
 }
 
 function unquoteValue(raw: string): string {
@@ -55,8 +62,8 @@ export function conditionTermToExpr(field: string, op: ConditionOp, value: strin
     case 'notEmpty': return `${field} != nil`
     case 'contains': return `string.contains(${field},${quoteValue(value)})`
     case 'notContains': return `!string.contains(${field},${quoteValue(value)})`
-    case 'eq': return `${field} == ${emitValue(value)}`
-    case 'ne': return `${field} != ${emitValue(value)}`
+    case 'eq': return `${field} == ${emitValue(value, field)}`
+    case 'ne': return `${field} != ${emitValue(value, field)}`
     case 'gt': return `${field} > ${emitValue(value)}`
     case 'lt': return `${field} < ${emitValue(value)}`
   }

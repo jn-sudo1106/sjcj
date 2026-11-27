@@ -135,6 +135,18 @@ describe('conditionsToExpr · 生成真实语法', () => {
     expect(conditionsToExpr([{ field: 'K5', op: 'gt', value: '100' }], 'AND')).toBe('K5 > 100')
     expect(conditionsToExpr([{ field: '_from', op: 'eq', value: 'api' }], 'AND')).toBe("_from == 'api'")
   })
+
+  it("K 列等值比较一律加引号：K 列是字符串，K11 == 1 在执行侧恒为 false（186 实测被全部 reject）", () => {
+    expect(conditionsToExpr([{ field: 'K11', op: 'eq', value: '1' }], 'AND')).toBe("K11 == '1'")
+    expect(conditionsToExpr([{ field: 'K11', op: 'ne', value: '3' }], 'AND')).toBe("K11 != '3'")
+    // 运行时标记仍保持裸数字
+    expect(conditionsToExpr([{ field: 'NEXT_FLAG', op: 'ne', value: '40597' }], 'AND')).toBe('NEXT_FLAG != 40597')
+  })
+
+  it("旧条件 K11 == 1 读进来再保存，会纠正成 K11 == '1'", () => {
+    const parsed = parseConditionExpr('K11 == 1')!
+    expect(conditionsToExpr(parsed.items, parsed.logic)).toBe("K11 == '1'")
+  })
 })
 
 describe('round-trip：解析→生成 语义不变', () => {
