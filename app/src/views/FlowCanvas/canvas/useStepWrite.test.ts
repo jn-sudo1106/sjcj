@@ -147,6 +147,35 @@ describe('useStepWrite.persistFlowSteps', () => {
     expect(modify.mock.calls[0][0].url).toBe('$VAL$')
   })
 
+  it('移除已保存的进入条件时明确写空串，回读后不重复保存', async () => {
+    setActivePinia(createPinia())
+    const { flow, source } = loadTestSource()
+    const snapshot = { ...SNAPSHOT, condition: 'K11 == 1' }
+    flow.loadFromSource(flow.sourceCfg!, [snapshot])
+    source.rememberSteps([snapshot], 'replace')
+    const modify = vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    const { persistFlowSteps } = useStepWrite()
+
+    await persistFlowSteps()
+    expect(modify).not.toHaveBeenCalled()
+
+    flow.setEntryCondition(snapshot.stepId, undefined)
+    await persistFlowSteps()
+    expect(modify).toHaveBeenCalledTimes(1)
+    const payload = stepToStepModifyPayload(modify.mock.calls[0][0])
+    expect(payload.cond).toBe('')
+
+    await persistFlowSteps()
+    expect(modify).toHaveBeenCalledTimes(1)
+
+    const saved = stepFromLegacy(payload, snapshot.sourceId)
+    flow.loadFromSource(flow.sourceCfg!, [saved])
+    source.rememberSteps([saved], 'replace')
+    expect(flow.configs[snapshot.stepId].collectCfg?.entryCondition).toBeUndefined()
+    await persistFlowSteps()
+    expect(modify).toHaveBeenCalledTimes(1)
+  })
+
   // 0903 YB-A 止血。真实源 920663 的拓扑：40597 ├─▶ 40598 / └─▶ 40620（两支同一前置），
   // 而 buildSourceSeed 把子步骤一律拍成直线，画布上看到的是 40597 → 40598 → 40620。
   // 按画布重算 lastStep 会把 40620 从 40597 挪到 40598 后面——分支被静默拍平且不可逆。

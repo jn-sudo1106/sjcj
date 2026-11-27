@@ -502,7 +502,8 @@ export function mergeStepForWrite(args: {
     extName: snapshot?.extName,
     // 任务 URL 表达式（2026-10-19 恢复编辑）：节点上改过用节点的，否则沿用快照 / 新建模板的值
     url: cfg.stepUrl ?? snapshot?.url,
-    condition: condExprOf(cfg) ?? undefined,
+    // stepModify 忽略 null；清除已有条件要写空串，回读空串后也沿用该值以免重复保存。
+    condition: condExprOf(cfg) ?? (snapshot?.condition == null ? undefined : ''),
     failAction: cfg.outputAdvanced?.failPolicy || snapshot?.failAction,
     dependsOn: lastStepIds?.length ? lastStepIds : undefined,
     // 规则节点（含翻译助手）的入出参在表配置里（ruleCfg / execCfg），不是任务配置
