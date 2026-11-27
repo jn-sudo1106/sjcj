@@ -182,6 +182,26 @@ describe('sourceDirs · 业务目录里的源', () => {
     expect(seen.find(([id]) => id === '9011515')?.[1]).toEqual(['3', '4'])
   })
 
+  it('慢目录尚未返回时继续查询并显示后续目录，最终顺序仍按目录树', async () => {
+    let release!: (value: { sourceIds: string[] }) => void
+    const slowDir = new Promise<{ sourceIds: string[] }>((resolve) => { release = resolve })
+    requestMock.mockImplementation(async (endpoint: string, body: Record<string, unknown>) => {
+      if (endpoint !== 'category/listSources') return null
+      const id = String(body.categoryId)
+      return id === '9011494' ? slowDir : { sourceIds: DIR_SOURCES[id] ?? [] }
+    })
+    const seen: string[] = []
+    const task = bizMembership((id) => seen.push(id))
+    try {
+      await vi.waitFor(() => expect(seen).toContain('9011496'))
+      expect(seen).not.toContain('9011494')
+    } finally {
+      release({ sourceIds: ['1'] })
+      await task
+    }
+    expect((await task).get('1')).toEqual(['9011494', '9011495', '9011496'])
+  })
+
   it('加入：POST 数字 ID，返回新增数，并让该目录的源缓存失效', async () => {
     await bizScopeSourceIds(['9011515'])
     expect(await addSourcesToBizDir('9011515', ['7', '8'])).toBe(2)

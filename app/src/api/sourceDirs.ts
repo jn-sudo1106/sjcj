@@ -395,25 +395,29 @@ function startMembership(): Promise<Map<string, string[]>> {
   membershipDone = false
   const task = (async () => {
     const all = await resolveBizTreeIds()
-    const map = new Map<string, string[]>()
-    for (let i = 0; i < all.length; i += MEMBERSHIP_CONCURRENCY) {
-      const ids = all.slice(i, i + MEMBERSHIP_CONCURRENCY)
-      // 整树枚举走后台优先级：只在用户操作没有请求在途时发，不再把浏览器连接占满（2026-11-19）
-      const lists = await Promise.all(ids.map((id) => bizDirSourceIds(id, { background: true })))
-      // 中途加入 / 移出源会作废重算，这批结果不再往订阅方推（避免旧结果盖新结果）
-      if (seq !== membershipSeq) return map
-      lists.forEach((sources, k) => {
-        const dirId = ids[k]!
-        sources.forEach((sid) => map.set(sid, [...(map.get(sid) ?? []), dirId]))
-        if (!sources.length) return
-        membershipListeners.forEach((listen) => {
-          try {
-            listen(dirId, sources)
-          } catch {
-            // 订阅方自己抛错不影响继续枚举
-          }
-        })
+    const queue = seq === membershipSeq ? [...all] : []
+    const sourcesByDir = new Map<string, string[]>()
+    // 每完成一条就补上下一条，保留后台优先级，单个慢目录不阻塞同批的其他目录。
+    await drainQueue(queue, MEMBERSHIP_CONCURRENCY, async (dirId) => {
+      const sources = await bizDirSourceIds(dirId, { background: true })
+      if (seq !== membershipSeq) {
+        queue.length = 0
+        return
+      }
+      sourcesByDir.set(dirId, sources)
+      if (!sources.length) return
+      membershipListeners.forEach((listen) => {
+        try {
+          listen(dirId, sources)
+        } catch {
+          // 订阅方自己抛错不影响继续枚举
+        }
       })
+    })
+    // 最终目录顺序仍以目录树为准，网站卡片的同票排序也沿用这一顺序。
+    const map = new Map<string, string[]>()
+    for (const dirId of all) {
+      sourcesByDir.get(dirId)?.forEach((sid) => map.set(sid, [...(map.get(sid) ?? []), dirId]))
     }
     return map
   })()
