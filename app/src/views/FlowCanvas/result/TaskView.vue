@@ -728,6 +728,9 @@ function onSelectQueue(q?: string) {
   form.queue = filters.queue
 }
 
+// 队列名下拉选中 / 清空即生效，不用再点「查询」（2026-11-27 用户要求）；其余筛选仍按草稿走
+watch(() => form.queue, (q) => { filters.queue = q.trim() })
+
 /** 草稿折算成查询条件（任务 ID / 数据 ID / 任务 URL 来自「字段 ▾ ＋ 输入框」） */
 function draftConditions() {
   return {

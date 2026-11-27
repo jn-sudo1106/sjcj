@@ -474,14 +474,11 @@ describe('TaskView', () => {
     const options = () => wrapper.findAll('.queue-opt').map((o) => o.attributes('data-v'))
     expect(options()).toEqual(expect.arrayContaining(['queue_download', 'queue_parse']))
 
-    // 选队列名：不立即查（2026-09-23 起改完点「查询」才生效），提示条件已修改
+    // 选队列名：立即查，不用点「查询」（2026-11-27 起），也不出「条件已修改」提示
     const callsBefore = paged.mock.calls.length
     queueSelect.vm.$emit('update:modelValue', 'queue_download')
     await flushPromises()
-    expect(paged.mock.calls.length).toBe(callsBefore)
-    expect(wrapper.find('[data-testid="task-filters-dirty"]').exists()).toBe(true)
-    await wrapper.get('[data-testid="task-query"]').trigger('click')
-    await flushPromises()
+    expect(paged.mock.calls.length).toBe(callsBefore + 1)
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ queue: 'queue_download', topic: 'queue_download' }))
     expect(wrapper.find('[data-testid="task-filters-dirty"]').exists()).toBe(false)
     // 1016：查完当前页只剩这个队列的任务，下拉候选不跟着收缩，仍能直接切到别的队列
@@ -812,20 +809,24 @@ describe('TaskView', () => {
 
     const n0 = paged.mock.calls.length
     await wrapper.get('[data-testid="task-state-filter"]').setValue('E')
-    // 手输候选里没有的队列名（allow-create）
+    await flushPromises()
+    // 状态仍是草稿：改完不查
+    expect(paged.mock.calls.length).toBe(n0)
+    // 手输候选里没有的队列名（allow-create）：队列名即时生效，状态草稿仍未生效
     wrapper.findComponent({ name: 'QueueSelectStub' }).vm.$emit('update:modelValue', 'news_cont')
     await flushPromises()
-    expect(paged.mock.calls.length).toBe(n0)
+    expect(paged.mock.calls.length).toBe(n0 + 1)
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: undefined, queue: 'news_cont' }))
 
     await wrapper.get('[data-testid="task-query"]').trigger('click')
     await flushPromises()
-    // 两个条件一次请求带上
-    expect(paged.mock.calls.length).toBe(n0 + 1)
+    // 点查询后状态也带上
+    expect(paged.mock.calls.length).toBe(n0 + 2)
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'E', queue: 'news_cont' }))
 
     await wrapper.get('[data-testid="task-query"]').trigger('click')
     await flushPromises()
-    expect(paged.mock.calls.length).toBe(n0 + 2)
+    expect(paged.mock.calls.length).toBe(n0 + 3)
 
     const clearBtn = wrapper.findAll('button').find((b) => b.text() === '清空')!
     await clearBtn.trigger('click')
