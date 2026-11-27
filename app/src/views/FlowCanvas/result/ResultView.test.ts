@@ -11,7 +11,7 @@ import { fetchNextStepConfig, type ResolvedNextStepConfig } from '@/utils/flow/n
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
-import { dataApi, flowCenterApi, isProductionBackend, ruleApi, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source, type Step } from '@/api'
+import { dataApi, flowCenterApi, isProductionBackend, isRealDataBackend, ruleApi, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source, type Step } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -32,7 +32,7 @@ vi.mock('vue-router', () => ({
 
 vi.mock('@/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api')>()
-  return { ...actual, isProductionBackend: vi.fn(() => false) }
+  return { ...actual, isProductionBackend: vi.fn(() => false), isRealDataBackend: vi.fn(() => false) }
 })
 
 vi.mock('element-plus', async (importOriginal) => {
@@ -743,6 +743,23 @@ describe('ResultView · 查询失败的暴露方式（0819 N3）', () => {
     expect(wrapper.text()).toContain('业务类型不存在')
     vi.mocked(isProductionBackend).mockReturnValue(false)
   })
+
+  it('连 186 这类真实测试后端时也不回退演示数据：CK 缺列的真实报错要原样露出来', async () => {
+    setActivePinia(createPinia())
+    vi.mocked(isRealDataBackend).mockReturnValue(true)
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    // 186 实测原文（截短）：CK 的原因在 DB::Exception 后面，前面的分号不能把它截掉
+    vi.spyOn(dataApi, 'rowQueryPaged').mockRejectedValue(new Error("错误信息:运行时异常: 查询服务返回失败(http://127.0.0.1:9201/qapi/v1/entry/data/paged): 查询失败: PreparedStatementCallback; bad SQL grammar [SELECT count() AS CNT FROM sense_data.TB_STOCK_TICK_TRADE WHERE (K11 = '1')]; nested exception is java.sql.BatchUpdateException: Code: 47. DB::Exception: Missing columns: 'K11' while processing query: 'SELECT count()'"))
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('已切换到本地演示数据')
+    expect(wrapper.text()).toContain("Missing columns: 'K11'")
+    vi.mocked(isRealDataBackend).mockReturnValue(false)
+  })
 })
 
 describe('ResultView · 大数据量保护（0819 N3-3）', () => {
@@ -1181,6 +1198,30 @@ describe('ResultView · 默认节点与默认列（0831 F09/F10）', () => {
 
     // 应当保持选中的 mid 节点，而不是变回 first
     expect(wrapper.findComponent(ProcessNodeRail).props('modelValue')).toBe('mid')
+  })
+
+  it('切节点换了表就清 SQL 条件（K11 条件带到逐笔成交 CK 表会报缺列）；同表不清', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    loadExecFixture(useFlowStore(), current)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const wrapper = mountResultView()
+    await flushPromises()
+    const sqlValue = () => (wrapper.get('[data-testid="data-cond-sql"]').element as HTMLInputElement).value
+    const rail = () => wrapper.findComponent(ProcessNodeRail)
+
+    // first 看 T1 → mid 看 T2：换表，清掉
+    await wrapper.get('[data-testid="data-cond-sql"]').setValue("K11 = '1'")
+    rail().vm.$emit('update:modelValue', 'mid')
+    await flushPromises()
+    expect(sqlValue()).toBe('')
+
+    // mid 看 T2 → last 也看 T2（输入表）：同表，保留
+    await wrapper.get('[data-testid="data-cond-sql"]').setValue("K1 = 'a'")
+    rail().vm.$emit('update:modelValue', 'last')
+    await flushPromises()
+    expect(sqlValue()).toBe("K1 = 'a'")
   })
 
   it('默认列取后继节点的上下文来源 + 进入条件字段，换算成当前表的 prop 传给表格', async () => {

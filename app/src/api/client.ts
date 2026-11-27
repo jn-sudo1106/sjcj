@@ -126,6 +126,16 @@ export function isProductionBackend(): boolean {
 }
 
 /**
+ * 连的是不是真实业务后端（217 生产、186、133 测试环境）——与写保护无关，只用来判断
+ * 「查询失败能不能拿本地演示数据顶上」。2026-11-27：186 算生产的测试环境，SQL 条件写错
+ * （CK 表缺列）时页面却显示「已切换到本地演示数据」，把真实报错盖住了。
+ */
+export function isRealDataBackend(): boolean {
+  const target = currentBackendTarget()
+  return [...CREATE_ALLOWED_BACKEND_HOSTS, ...SOURCE_ISSUE_WRITE_BLOCKED_HOSTS].some((host) => target.includes(host))
+}
+
+/**
  * 真实新建采集通道：代理已指向「可新建后端」（生产 217 或本地开发环境 186），且显式允许新建。
  * 日常联调保持 VITE_API_MODE=mock（已迁移 live 端点走正式接口，未迁移继续 mock），
  * 不要用 VITE_API_MODE=http 一刀切打生产。

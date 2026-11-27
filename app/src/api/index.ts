@@ -91,7 +91,7 @@ import { aggregateUsedTables, countSourcesWithoutFlow, type UsedTable } from '@/
 import { snatchAckFrom, type SnatchAck } from '@/utils/snatchResult'
 
 export * from './types'
-export { isDanger, DANGER_ENDPOINTS, isMockMode, isProductionBackend, isProductionCreateEnabled } from './client'
+export { isDanger, DANGER_ENDPOINTS, isMockMode, isProductionBackend, isProductionCreateEnabled, isRealDataBackend } from './client'
 export * from './logReport'
 export { parseNextStepReceipt, type NextStepReceipt, type NextStepReceiptEntry } from './legacyAdapters'
 

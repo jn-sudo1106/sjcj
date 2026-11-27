@@ -8,7 +8,7 @@ import { ArrowDown, ArrowUp, Search } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { buildQueryServiceMore, dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery, type Step } from '@/api'
+import { buildQueryServiceMore, dataApi, isMockMode, isProductionBackend, isRealDataBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery, type Step } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
   isFirstRunnableNode, hasDirectSuccessor, directPredecessorIds, directSuccessorIds, directSuccessorIdsIncludingDisabled, type NodeConfig,
@@ -1189,9 +1189,19 @@ watch(
 
 // 手动切节点（节点轨道 / 下拉框都走这一个入口，0812 计划 M2-9）：范围、页码、条件展开态
 // 一并重置，不残留上一个节点的浏览状态串到新节点上。
+/**
+ * 换了表就清 SQL 条件（2026-11-27 186 实测）：条件里写的是上一张表的列（K11 = '1'），
+ * 切到逐笔成交节点（CK 表只有 K1–K10）照样带着查，后端报 Missing columns: 'K11'。
+ * 只清 SQL：状态是各表通用的系统列；数据 ID / 父 ID 由深链和「下级」跳转在切换后自行填写。
+ */
+function clearSqlIfTableChanged(beforeTable: string) {
+  if (beforeTable && selectedTable.value !== beforeTable) filters.sql = ''
+}
+
 function onSelectNode(id: string) {
   ui.clearInspectorFieldFilter()
   if (id === selectedNodeId.value) return
+  const beforeTable = selectedTable.value
   selectedNodeId.value = id
   if (browseMode.value === 'table' && id) {
     const cfg = allNodes.value.find(n => n.id === id)?.cfg
@@ -1203,13 +1213,16 @@ function onSelectNode(id: string) {
   // 否则会出现"左边在看 A 的数据、右边在改 B 的配置"这种最容易误操作的状态。
   flow.select(id)
   scope.value = defaultScope()
+  clearSqlIfTableChanged(beforeTable)
   page.value = 1
   selectedRowIds.value = []
   sortField.value = ''
   sortOrder.value = ''
 }
 function selectTable(id: string) {
+  const beforeTable = selectedTable.value
   tableChoice.value = id
+  clearSqlIfTableChanged(beforeTable)
   if (browseMode.value === 'table') {
     const query = { ...route.query }
     delete query.nodeId
@@ -1294,6 +1307,10 @@ onBeforeUnmount(stopSlowTimer)
 // 这一句，前后还裹着 jar 路径、mapper 类名、参数占位的 SQL，实测一千多字，整段铺在提示条上
 // 没法看。这里抽出首要原因显示，完整原文挂 title 悬浮，排查时仍拿得到。
 function briefError(message: string): string {
+  // CK 表（如逐笔成交 6910013）的报错是 `DB::Exception: Missing columns: 'K11' while processing query: ...`，
+  // 前面同样裹着 PreparedStatementCallback; bad SQL grammar [...]，按 MySQL 的规则会截在第一个分号前。
+  const ck = message.match(/DB::Exception:\s*(.+?)(?:\s+while processing query|\s*\(version|$)/)
+  if (ck) return ck[1].trim()
   const m = message.match(/SQLSyntaxErrorException:\s*([^#;]+)/)
     || message.match(/Cause:\s*([^#;]+)/)
     || message.match(/错误信息:\s*([^#;]+)/)
@@ -1444,7 +1461,8 @@ async function loadData() {
     // 默认是 Mock + 已联调端点走真实后端：演示流程的表可能只存在本地种子数据，失败时回退
     // 到种子数据看一眼是有意义的。但**连着生产后端时绝不回退**：页面顶着"生产环境"徽标
     // 却显示本地演示数据，只靠一行小字提示，误判成真实数据是迟早的事——宁可空着报错。
-    if (isMockMode() && !isProductionBackend() && (metaRes.status === 'rejected' || dataRes.status === 'rejected')) {
+    // 186 / 217 / 133 都是真实后端：失败就是真失败（如 CK 表缺列），不回退演示数据。
+    if (isMockMode() && !isProductionBackend() && !isRealDataBackend() && (metaRes.status === 'rejected' || dataRes.status === 'rejected')) {
       const [fallbackMeta, fallbackData] = await Promise.allSettled([
         dataApi.tableMeta(selectedTable.value, { mode: 'mock' }),
         dataApi.rowQueryPaged(query, { mode: 'mock' }),
